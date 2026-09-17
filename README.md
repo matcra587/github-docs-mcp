@@ -18,28 +18,57 @@ built-in rate limiting and retry, over stdio or streamable HTTP.
 
 ## Install
 
-Before the first public release, install from an existing checkout:
+Choose a published binary, container or source installation. After installing,
+[configure your MCP client](#mcp-server). For a development checkout, see
+[CONTRIBUTING.md](CONTRIBUTING.md#local-setup).
+
+### Container
+
+Requires Docker. Pull the current stable image and check its version:
 
 ```sh
-mise install --locked
-mise exec -- go install ./cmd/github-docs-mcp
+docker pull ghcr.io/matcra587/github-docs-mcp:latest
+docker run --rm ghcr.io/matcra587/github-docs-mcp:latest -version
 ```
 
-Put `GOBIN` (or `$(go env GOPATH)/bin` when `GOBIN` is unset) on your `PATH`.
-The following distribution commands require a published repository, release
-and container image; they are not available anonymously during private development.
+Use a version tag such as `v0.1.0` instead of `latest` to select a specific
+release. The release page also provides immutable image digest references.
+
+### Prebuilt binary
+
+Download an archive for your OS and architecture from
+[Releases](https://github.com/matcra587/github-docs-mcp/releases):
+
+| Platform | Archive suffix |
+| --- | --- |
+| Linux x86-64 | `linux_amd64.tar.gz` |
+| Linux ARM64 | `linux_arm64.tar.gz` |
+| macOS Apple Silicon | `darwin_arm64.tar.gz` |
+| Windows x86-64 | `windows_amd64.zip` |
+| Windows ARM64 | `windows_arm64.zip` |
+
+[Verify the archive](#verify-a-public-release) before extracting it. Put
+`github-docs-mcp` (or `github-docs-mcp.exe` on Windows) in a directory on your
+`PATH`, then run `github-docs-mcp -version`. The verification section includes
+an installation example for Linux and macOS.
+
+### From source
+
+Requires a Go toolchain compatible with [go.mod](go.mod):
 
 ```sh
-# Container (recommended)
-docker pull ghcr.io/matcra587/github-docs-mcp:latest
-
-# Prebuilt binary: see the releases page for macOS (arm64), Linux
-# (amd64/arm64) and Windows (amd64/arm64) archives, plus checksums.txt
-# https://github.com/matcra587/github-docs-mcp/releases
-
-# From source
 go install github.com/matcra587/github-docs-mcp/cmd/github-docs-mcp@latest
 ```
+
+The executable is installed into `GOBIN`, or `$(go env GOPATH)/bin` when
+`GOBIN` is unset. Add that directory to your `PATH`, then check the installation:
+
+```sh
+github-docs-mcp -version
+```
+
+Replace `@latest` with a release tag such as `@v0.1.0` to pin the source version.
+Restart your MCP client after upgrading so it launches the new executable.
 
 ## MCP server
 
@@ -61,7 +90,7 @@ claude mcp add github-docs -- docker run -i --rm ghcr.io/matcra587/github-docs-m
 }
 ```
 
-**stdio, no container.** If you installed the binary with `go install`:
+**stdio, no container.** For a prebuilt or source-installed binary on your `PATH`:
 
 ```sh
 claude mcp add github-docs -- github-docs-mcp
@@ -79,7 +108,7 @@ claude mcp add github-docs -- github-docs-mcp
 
 **streamable HTTP.** A shared, long-running server at `/mcp`. The image needs
 `MCP_TRANSPORT=http` to serve it, which `docker-compose.yml` already sets.
-Run from a checkout after the container image is published:
+Run from a checkout (see [local setup](CONTRIBUTING.md#local-setup)):
 
 ```sh
 docker compose up -d
@@ -100,7 +129,7 @@ claude mcp add --transport http github-docs http://127.0.0.1:8080/mcp
 For Codex, use its CLI to write `~/.codex/config.toml`. Choose one transport:
 
 ```sh
-# Container-backed stdio, after the image is published
+# Container-backed stdio
 codex mcp add github-docs -- docker run -i --rm ghcr.io/matcra587/github-docs-mcp:latest
 
 # Locally installed binary
@@ -244,7 +273,7 @@ contents, then verify the archive and its build provenance:
 
 ```sh
 repo=matcra587/github-docs-mcp
-tag=v1.2.3 # replace with an existing public release
+tag=v0.1.0 # choose an existing release from the releases page
 archive="github-docs-mcp_${tag#v}_linux_amd64.tar.gz"
 identity="https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}"
 
@@ -264,12 +293,28 @@ On macOS, substitute `shasum -a 256 --check` for `sha256sum --check --strict`.
 Stop if any verification fails. Verify the archive before extracting it;
 the archive attestation does not apply directly to the extracted executable.
 
+After verification, Linux and macOS users can install the selected `.tar.gz`
+archive into a user-owned directory. On macOS, select the `darwin_arm64`
+archive in the download example first.
+
+```sh
+tar -xzf "$archive" github-docs-mcp
+install_dir="$HOME/.local/bin"
+mkdir -p "$install_dir"
+install -m 755 github-docs-mcp "$install_dir/github-docs-mcp"
+"$install_dir/github-docs-mcp" -version
+```
+
+Add that directory to your `PATH`, or use the executable's absolute path in
+your MCP client configuration. On Windows, extract the verified `.zip` and
+place `github-docs-mcp.exe` in a directory on your user `Path`.
+
 Keep `repo`, `tag` and `identity` from the preceding example set in the same shell.
 For a container, copy the full `image:tag@sha256:...` reference from the release's
 Docker Manifests section. Verify the digest with both tools before running it:
 
 ```sh
-image='ghcr.io/matcra587/github-docs-mcp:v1.2.3@sha256:REPLACE_WITH_RELEASE_DIGEST'
+image='ghcr.io/matcra587/github-docs-mcp:v0.1.0@sha256:REPLACE_WITH_RELEASE_DIGEST'
 cosign verify "$image" --certificate-identity "$identity" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh attestation verify "oci://${image}" --repo "$repo" \
