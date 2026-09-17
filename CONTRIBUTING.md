@@ -1,11 +1,42 @@
 # Contributing
 
-Install mise first. Race tests require a C compiler and linker; CI and release
+For published binaries, containers and MCP client configuration, see the
+[README installation guide](README.md#install). This guide covers working on
+the source repository.
+
+## Local setup
+
+Install [mise](https://mise.jdx.dev/getting-started.html) and Git first. Race tests require a C compiler and linker; CI and release
 checks also require Docker with Compose and Buildx. The optional MCP Inspector
-requires Node.js 22.19 or newer and `npx`. Commands below run from the repository root.
+requires Node.js 22.19 or newer and `npx`. Clone the repository and prepare the checkout:
 
 ```sh
-mise install --locked # toolchain + linters from mise.lock
+git clone https://github.com/matcra587/github-docs-mcp.git
+cd github-docs-mcp
+mise trust
+mise install --locked
+mise run hooks:install
+mise run build
+./bin/github-docs-mcp -version
+```
+
+`mise run build` writes the development binary to `bin/`. To install the
+checkout into Go's binary directory instead:
+
+```sh
+mise exec -- go install ./cmd/github-docs-mcp
+```
+
+Ensure `GOBIN` (or `$(go env GOPATH)/bin` when `GOBIN` is unset) is on your `PATH` before configuring
+your MCP client. Restart the client after rebuilding an executable it uses.
+To return to a release build, follow the [installation guide](README.md#install).
+
+## Checks
+
+[Tasks](tasks.toml) define the commands used locally and in CI. Run them from
+the repository root:
+
+```sh
 mise run test       # unit + in-process integration; zero network
 mise run check      # hk checks + offline race tests
 mise run ci         # exactly what GitHub CI runs (same task, via mise-action)
@@ -25,14 +56,15 @@ Offline testing with the committed fixtures, using two terminals:
 mise run fixture-serve
 
 # Terminal 2: start the stdio server with the fixture origin
-DOCS_BASE_URL=http://127.0.0.1:9999 mise run run
+DOCS_CACHE_DIR= DOCS_BASE_URL=http://127.0.0.1:9999 mise run run
 ```
 
+The fixture example disables disk caching to keep development content isolated.
 The stdio process expects MCP messages, not interactive shell commands.
 For an interactive client, use MCP Inspector in terminal 2 instead:
 
 ```sh
-mise exec -- npx --yes @modelcontextprotocol/inspector --web -e DOCS_BASE_URL=http://127.0.0.1:9999 go run ./cmd/github-docs-mcp
+mise exec -- npx --yes @modelcontextprotocol/inspector --web -e DOCS_CACHE_DIR= -e DOCS_BASE_URL=http://127.0.0.1:9999 go run ./cmd/github-docs-mcp
 ```
 
 Omit `-e DOCS_BASE_URL=http://127.0.0.1:9999` to inspect the live GitHub documentation instead.
