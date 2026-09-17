@@ -147,6 +147,11 @@ codex mcp add github-docs --url http://127.0.0.1:8080/mcp
 | `search_docs` | `query`, `limit?` (default 10, max 50) | ranked hits with breadcrumbs and a matching-content snippet |
 | `get_doc` | `slug`, `heading?`, `query?`, `offset?` | page markdown; `heading` extracts one named section, `query` returns only the sections matching keywords (verbatim, with breadcrumbs; cheapest way to pull one fact from a long page), `offset` continues a truncated page |
 
+Search results include cached page byte counts when available. Uncached sizes
+are marked unknown; search never downloads pages just to measure them. Cached
+sizes may differ from the current origin. Use `get_doc` with `query` or `heading`
+to retrieve focused content from a large page.
+
 Pages are windowed at 50KB: a notice at the top shows the byte range and a
 marker at the bottom gives the `offset` to continue from (or suggests
 `heading` for a single section).

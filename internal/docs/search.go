@@ -15,6 +15,7 @@ type Hit struct {
 	Score       int
 	Snippet     string
 	MatchedBody bool
+	PageBytes   *int
 }
 
 const (
@@ -215,7 +216,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, e
 		hits, serr := s.searchOrigin(ctx, idx, query, limit)
 		if serr == nil {
 			s.record(ctx, decision("search", "bypass", "origin", time.Time{}, 0))
-			return hits, nil
+			return s.withSizes(hits), nil
 		}
 
 		// A cancelled caller gets its cancellation, never a quietly narrower
@@ -230,7 +231,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, e
 	hits := s.searchLocal(ctx, idx, query, tokens, limit)
 	s.record(ctx, decision("search", "fallback", "memory", time.Time{}, 0))
 
-	return hits, nil
+	return s.withSizes(hits), nil
 }
 
 // searchLocal ranks catalogue metadata and augments it with cached page
@@ -370,4 +371,15 @@ func editDistance(a, b string) int {
 	}
 
 	return prev[len(b)]
+}
+
+// withSizes uses only already-cached bodies; measuring a result never fetches it.
+func (s *Service) withSizes(hits []Hit) []Hit {
+	for i := range hits {
+		if size, ok := s.pages.Size(hits[i].Doc.Slug); ok {
+			hits[i].PageBytes = &size
+		}
+	}
+
+	return hits
 }
