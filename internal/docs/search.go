@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Hit is one search result. MatchedBody marks hits found in cached page
@@ -213,6 +214,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, e
 	if !s.originCoolingDown() {
 		hits, serr := s.searchOrigin(ctx, idx, query, limit)
 		if serr == nil {
+			s.record(ctx, decision("search", "bypass", "origin", time.Time{}, 0))
 			return hits, nil
 		}
 
@@ -225,13 +227,16 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, e
 		s.noteOriginFailure()
 	}
 
-	return s.searchLocal(idx, query, tokens, limit), nil
+	hits := s.searchLocal(ctx, idx, query, tokens, limit)
+	s.record(ctx, decision("search", "fallback", "memory", time.Time{}, 0))
+
+	return hits, nil
 }
 
 // searchLocal ranks catalogue metadata and augments it with cached page
 // bodies: a doc whose cached content contains every token is included even
 // when its metadata does not match. This is the origin-outage path.
-func (s *Service) searchLocal(idx *Index, query string, tokens []string, limit int) []Hit {
+func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tokens []string, limit int) []Hit {
 	hits := SearchIndex(idx, query, 0)
 	seen := make(map[string]bool, len(hits))
 
@@ -242,13 +247,16 @@ func (s *Service) searchLocal(idx *Index, query string, tokens []string, limit i
 	// Body matches: record the match cheaply, defer snippet building until
 	// after sort+truncate so only the retained hits pay for section splitting.
 	bodyMatched := make(map[string][]byte)
+	decisions := make(map[string]CacheDecision)
 
 	for _, d := range idx.Docs {
 		if seen[d.Slug] {
 			continue
 		}
 
-		body, _, ok := s.pages.Get(d.Slug)
+		body, state, ok, cacheDecision := s.pages.lookup(d.Slug)
+		s.pages.log(cacheDecision)
+
 		if !ok {
 			continue
 		}
@@ -258,6 +266,12 @@ func (s *Service) searchLocal(idx *Index, query string, tokens []string, limit i
 		}
 
 		bodyMatched[d.Slug] = body
+
+		if state == StateStale {
+			cacheDecision.Status = "stale-serve"
+		}
+
+		decisions[d.Slug] = cacheDecision
 
 		hits = append(hits, Hit{Doc: d, Score: bodyWeight * len(tokens), MatchedBody: true})
 	}
@@ -271,6 +285,7 @@ func (s *Service) searchLocal(idx *Index, query string, tokens []string, limit i
 	for i := range hits {
 		if body, ok := bodyMatched[hits[i].Doc.Slug]; ok {
 			hits[i].Snippet = bodySnippet(body, query, tokens)
+			s.record(ctx, decisions[hits[i].Doc.Slug])
 		}
 	}
 

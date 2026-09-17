@@ -2,6 +2,7 @@ package docs
 
 import (
 	"container/list"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -22,6 +23,7 @@ const (
 // replacement or byte-cap pressure does. Stored values are copied on the way
 // in and out, so entries are immutable to callers. Safe for concurrent use.
 type Cache struct {
+	logger   *slog.Logger
 	mu       sync.Mutex
 	maxBytes int64
 	curBytes int64
@@ -30,6 +32,7 @@ type Cache struct {
 }
 
 type cacheEntry struct {
+	source   string
 	key      string
 	value    []byte
 	storedAt time.Time
@@ -39,6 +42,7 @@ type cacheEntry struct {
 // NewCache returns a Cache holding at most maxBytes of values.
 func NewCache(maxBytes int64) *Cache {
 	return &Cache{
+		logger:   slog.Default(),
 		maxBytes: maxBytes,
 		entries:  make(map[string]*list.Element),
 		lru:      list.New(),
@@ -47,12 +51,21 @@ func NewCache(maxBytes int64) *Cache {
 
 // Get returns the value for key and its freshness state.
 func (c *Cache) Get(key string) ([]byte, EntryState, bool) {
+	value, state, ok, d := c.lookup(key)
+	c.log(d)
+
+	return value, state, ok
+}
+
+func (c *Cache) lookup(key string) ([]byte, EntryState, bool, CacheDecision) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	el, ok := c.entries[key]
 	if !ok {
-		return nil, StateUnknown, false
+		d := decision("page:"+key, "miss", "memory", time.Time{}, 0)
+
+		return nil, StateUnknown, false, d
 	}
 
 	c.lru.MoveToFront(el)
@@ -66,7 +79,14 @@ func (c *Cache) Get(key string) ([]byte, EntryState, bool) {
 	out := make([]byte, len(e.value))
 	copy(out, e.value)
 
-	return out, state, true
+	status := "hit"
+	if state == StateStale {
+		status = "expired"
+	}
+
+	d := decision("page:"+key, status, e.source, e.storedAt, e.ttl)
+
+	return out, state, true, d
 }
 
 // Put stores value under key with ttl, replacing any existing entry. Values
@@ -79,7 +99,12 @@ func (c *Cache) Put(key string, value []byte, ttl time.Duration) {
 // putAged is Put with an explicit storage time, used when rehydrating from
 // disk so persisted entries keep their real age (and staleness).
 func (c *Cache) putAged(key string, value []byte, ttl time.Duration, storedAt time.Time) {
+	c.putSource(key, value, ttl, storedAt, "memory")
+}
+
+func (c *Cache) putSource(key string, value []byte, ttl time.Duration, storedAt time.Time, source string) {
 	if int64(len(value)) > c.maxBytes {
+		c.log(decision("page:"+key, "write-skipped", source, storedAt, ttl))
 		return
 	}
 
@@ -95,13 +120,16 @@ func (c *Cache) putAged(key string, value []byte, ttl time.Duration, storedAt ti
 		e.value = stored
 		e.storedAt = storedAt
 		e.ttl = ttl
+		e.source = source
 		c.curBytes += int64(len(stored))
 		c.lru.MoveToFront(el)
 	} else {
-		el := c.lru.PushFront(&cacheEntry{key: key, value: stored, storedAt: storedAt, ttl: ttl})
+		el := c.lru.PushFront(&cacheEntry{source: source, key: key, value: stored, storedAt: storedAt, ttl: ttl})
 		c.entries[key] = el
 		c.curBytes += int64(len(stored))
 	}
+
+	c.log(decision("page:"+key, "write", source, storedAt, ttl))
 
 	for c.curBytes > c.maxBytes {
 		oldest := c.lru.Back()
@@ -110,6 +138,7 @@ func (c *Cache) putAged(key string, value []byte, ttl time.Duration, storedAt ti
 		}
 
 		e := oldest.Value.(*cacheEntry) //nolint:forcetypeassert,errcheck // list only ever holds *cacheEntry
+		c.log(decision("page:"+e.key, "eviction", e.source, e.storedAt, e.ttl))
 		c.lru.Remove(oldest)
 		delete(c.entries, e.key)
 		c.curBytes -= int64(len(e.value))

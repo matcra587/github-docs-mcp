@@ -91,6 +91,7 @@ func serve(ctx context.Context, cfg *config, logger *slog.Logger) error {
 	}
 
 	svcCfg := docs.ServiceConfig{
+		Logger:        logger,
 		IndexTTL:      cfg.indexTTL,
 		PageTTL:       cfg.pageTTL,
 		CacheMaxBytes: cfg.cacheMaxBytes,
