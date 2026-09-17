@@ -115,7 +115,12 @@ Disk failures do not prevent serving documentation. Alternate `-base-url` origin
 use separate cache subdirectories.
 
 Persisted values use a 256 MiB budget, pruning oldest page writes before catalogue entries after each store.
-Concurrent writers may briefly exceed it. Container filesystems disappear with
+Disk reads, writes and pruning share an operating-system lock across processes.
+Lock acquisition waits at most one second; failures leave the in-memory cache usable.
+Use a local filesystem with working file locks. Older versions do not participate
+in this locking protocol; upgrade all processes sharing the directory. The budget
+excludes temporary files and filesystem overhead. This cache is not a durable store.
+Container filesystems disappear with
 `--rm`; use the Compose cache volume for persistence across container restarts.
 
 **streamable HTTP.** A shared, long-running server at `/mcp`. The image needs

@@ -15,7 +15,8 @@ import (
 // DiskCache persists cache entries as flat files under one directory, scoped
 // with os.Root so no key, however hostile, can write outside it. Filenames
 // are the URL-escaped key; mtime carries the entry's age across restarts.
-// Writes are atomic (temp file + rename), so a torn write can never surface.
+// A process-shared lock serializes disk reads, replacement and pruning.
+// Temporary files keep incomplete writes out of the cache.
 type DiskCache struct {
 	root     *os.Root
 	maxBytes int64
@@ -30,6 +31,7 @@ type DiskEntry struct {
 
 // NewDiskCache creates dir (0700) if needed and opens it as the cache root.
 func NewDiskCache(dir string) (*DiskCache, error) {
+	// #nosec G703 -- The cache directory is an explicit local CLI setting.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
@@ -42,11 +44,21 @@ func NewDiskCache(dir string) (*DiskCache, error) {
 	return &DiskCache{root: root, maxBytes: 256 << 20}, nil
 }
 
-// Store writes value under key atomically with private permissions.
+// Store publishes a complete value under key with private permissions.
 func (d *DiskCache) Store(key string, value []byte) error {
+	if key == diskLockName {
+		return fmt.Errorf("reserved cache key: %w", os.ErrInvalid)
+	}
+
 	if int64(len(value)) > d.maxBytes {
 		return nil
 	}
+
+	lock, err := d.lock()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
 
 	name := encodeKey(key)
 
@@ -98,6 +110,12 @@ func (d *DiskCache) Load() ([]DiskEntry, error) {
 }
 
 func (d *DiskCache) loadBounded(budget int64) ([]DiskEntry, error) {
+	lock, err := d.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+
 	files, err := fs.ReadDir(d.root.FS(), ".")
 	if err != nil {
 		return nil, fmt.Errorf("read cache dir: %w", err)
@@ -114,7 +132,7 @@ func (d *DiskCache) loadBounded(budget int64) ([]DiskEntry, error) {
 	)
 
 	for _, file := range files {
-		if !file.Type().IsRegular() {
+		if file.Name() == diskLockName || !file.Type().IsRegular() {
 			continue
 		}
 
@@ -128,7 +146,7 @@ func (d *DiskCache) loadBounded(budget int64) ([]DiskEntry, error) {
 			continue
 		}
 
-		entry, ok := d.loadEntry(name, file, budget-loaded)
+		entry, ok := d.loadEntry(name, budget-loaded)
 		if !ok {
 			continue
 		}
@@ -142,14 +160,9 @@ func (d *DiskCache) loadBounded(budget int64) ([]DiskEntry, error) {
 
 // loadEntry skips invalid, unreadable and oversized files. The read limit also
 // bounds entries that grow after their directory metadata was collected.
-func (d *DiskCache) loadEntry(path string, de fs.DirEntry, budget int64) (DiskEntry, bool) {
+func (d *DiskCache) loadEntry(path string, budget int64) (DiskEntry, bool) {
 	key, err := decodeKey(path)
 	if err != nil {
-		return DiskEntry{}, false
-	}
-
-	info, err := de.Info()
-	if err != nil || info.Size() > budget {
 		return DiskEntry{}, false
 	}
 
@@ -158,8 +171,14 @@ func (d *DiskCache) loadEntry(path string, de fs.DirEntry, budget int64) (DiskEn
 		return DiskEntry{}, false
 	}
 
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > budget {
+		return DiskEntry{}, false
+	}
+
 	value, err := io.ReadAll(io.LimitReader(f, budget+1))
-	_ = f.Close()
 
 	if err != nil || int64(len(value)) > budget {
 		return DiskEntry{}, false
@@ -188,8 +207,7 @@ func decodeKey(name string) (string, error) {
 	return key, nil
 }
 
-// prune bounds persisted values after writes. Concurrent processes may briefly
-// exceed the budget; each writer prunes after publishing its complete entry.
+// prune bounds persisted values after writes while the disk lock is held.
 // Recent temporary files belong to active writers and are never removed here.
 func (d *DiskCache) prune() {
 	entries, err := fs.ReadDir(d.root.FS(), ".")
@@ -208,7 +226,7 @@ func (d *DiskCache) prune() {
 	)
 
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || strings.Contains(entry.Name(), ".tmp.") {
+		if entry.Name() == diskLockName || !entry.Type().IsRegular() || strings.Contains(entry.Name(), ".tmp.") {
 			continue
 		}
 
