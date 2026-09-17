@@ -101,7 +101,7 @@ func (s *Service) loadDisk() {
 		return
 	}
 
-	entries, err := s.disk.Load()
+	entries, err := s.disk.loadBounded(s.pages.maxBytes + 2*catalogueMaxBytes)
 	if err != nil {
 		return
 	}
