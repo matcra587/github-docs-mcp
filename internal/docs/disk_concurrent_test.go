@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,6 +68,9 @@ func TestDiskCacheSweepsLeftoverTemps(t *testing.T) {
 	// Simulate two crashed stores.
 	for _, name := range []string{"en%2Fhooks.tmp.99", "en%2Fother.tmp.1"} {
 		must.NoError(os.WriteFile(filepath.Join(dir, name), []byte("partial"), 0o600))
+
+		old := time.Now().Add(-48 * time.Hour)
+		must.NoError(os.Chtimes(filepath.Join(dir, name), old, old))
 	}
 
 	entries, err := dc.Load()

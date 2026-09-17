@@ -6,12 +6,14 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -98,7 +100,7 @@ func serve(ctx context.Context, cfg *config, logger *slog.Logger) error {
 	}
 
 	if cfg.cacheDir != "" {
-		disk, err := docs.NewDiskCache(cfg.cacheDir)
+		disk, err := docs.NewDiskCache(cacheOriginDir(cfg.cacheDir, cfg.baseURL))
 		if err != nil {
 			// Degrade to memory-only: the disk cache is an optimisation,
 			// never a reason to refuse to start.
@@ -150,7 +152,7 @@ func parseConfig(args []string) (*config, error) {
 	fs.StringVar(&cfg.transport, "transport", cmp.Or(os.Getenv("MCP_TRANSPORT"), "stdio"), "transport: stdio or http")
 	fs.StringVar(&cfg.httpAddr, "http-addr", cmp.Or(os.Getenv("MCP_HTTP_ADDR"), "127.0.0.1:8080"), "listen address for http transport")
 	fs.StringVar(&cfg.baseURL, "base-url", cmp.Or(os.Getenv("DOCS_BASE_URL"), "https://docs.github.com"), "docs origin base URL (https; http allowed for loopback)")
-	fs.StringVar(&cfg.cacheDir, "cache-dir", os.Getenv("DOCS_CACHE_DIR"), "optional disk cache directory (empty = memory only)")
+	fs.StringVar(&cfg.cacheDir, "cache-dir", defaultCacheDir(), "disk cache directory (empty = memory only)")
 	fs.StringVar(&cfg.allowedOrigins, "allowed-origins", os.Getenv("MCP_ALLOWED_ORIGINS"), "comma-separated Origin allow-list for http transport (empty = localhost only)")
 	fs.StringVar(&cfg.logLevel, "log-level", cmp.Or(os.Getenv("LOG_LEVEL"), "info"), "log level: debug, info, warn, error")
 
@@ -267,4 +269,29 @@ func envInt64(key string, def int64) (int64, error) {
 	}
 
 	return n, nil
+}
+
+// defaultCacheDir distinguishes an explicitly empty environment override from
+// an unset variable. Platforms without a usable user cache remain memory-only.
+func defaultCacheDir() string {
+	if dir, ok := os.LookupEnv("DOCS_CACHE_DIR"); ok {
+		return dir
+	}
+
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+
+	return filepath.Join(dir, "github-docs-mcp")
+}
+
+// Alternate origins must never hydrate the public origin's persisted content.
+func cacheOriginDir(dir, baseURL string) string {
+	origin := strings.TrimSuffix(baseURL, "/")
+	if origin == "https://docs.github.com" {
+		return dir
+	}
+
+	return filepath.Join(dir, "origins", fmt.Sprintf("%x", sha256.Sum256([]byte(origin))))
 }
