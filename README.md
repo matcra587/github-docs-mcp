@@ -106,6 +106,23 @@ claude mcp add github-docs -- github-docs-mcp
 }
 ```
 
+Native clients automatically reuse `os.UserCacheDir()/github-docs-mcp` across
+sessions (for example, `$XDG_CACHE_HOME/github-docs-mcp` on Linux). No additional
+MCP arguments are needed. Set `DOCS_CACHE_DIR` or pass `-cache-dir` to choose a
+location; explicitly setting either to an empty string disables persistence.
+If the user cache directory cannot be resolved, caching stays memory-only.
+Disk failures do not prevent serving documentation. Alternate `-base-url` origins
+use separate cache subdirectories.
+
+Persisted values use a 256 MiB budget, pruning oldest page writes before catalogue entries after each store.
+Disk reads, writes and pruning share an operating-system lock across processes.
+Lock acquisition waits at most one second; failures leave the in-memory cache usable.
+Use a local filesystem with working file locks. Older versions do not participate
+in this locking protocol; upgrade all processes sharing the directory. The budget
+excludes temporary files and filesystem overhead. This cache is not a durable store.
+Container filesystems disappear with
+`--rm`; use the Compose cache volume for persistence across container restarts.
+
 **streamable HTTP.** A shared, long-running server at `/mcp`. The image needs
 `MCP_TRANSPORT=http` to serve it, which `docker-compose.yml` already sets.
 Run from a checkout (see [local setup](CONTRIBUTING.md#local-setup)):
@@ -205,7 +222,7 @@ Every knob is an environment variable with a flag override (flag wins).
 | `DOCS_PAGE_TTL` | `-page-ttl` | `24h` | page freshness window |
 | `DOCS_FETCH_RPS` | `-fetch-rps` | `2` (burst 2×) | outbound token bucket |
 | `DOCS_CACHE_MAX_BYTES` | `-cache-max-bytes` | `64MiB` | memory cache LRU byte cap |
-| `DOCS_CACHE_DIR` | `-cache-dir` | unset (memory only) | opt-in disk cache, survives restarts |
+| `DOCS_CACHE_DIR` | `-cache-dir` | user cache directory + `/github-docs-mcp` | disk cache survives restarts; empty disables it |
 | `LOG_LEVEL` | `-log-level` | `info` | slog level; JSON logs on stderr |
 
 With `-log-level debug`, stderr includes cache decisions (`hit`, `miss`,
@@ -349,7 +366,7 @@ their source and build. Neither guarantees vulnerability-free software.
 
 **Stale beats error.** Documentation that is a day old is useful; an error is
 not. Entries past their TTL are kept, not evicted, and served with a note when
-the origin cannot be reached. A disk cache (opt-in) carries that across
+the origin cannot be reached. The default disk cache carries that across
 restarts, so a process starting during an outage still has something to serve.
 
 **One fetch per miss.** Concurrent callers for the same page share a single
