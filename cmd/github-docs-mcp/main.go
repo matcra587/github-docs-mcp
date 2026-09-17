@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -47,6 +48,8 @@ type config struct {
 }
 
 func main() {
+	version = buildVersion(version, debug.ReadBuildInfo)
+
 	os.Exit(run())
 }
 
