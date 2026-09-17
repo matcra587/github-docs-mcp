@@ -1,0 +1,44 @@
+#:schema https://mise.en.dev/schema/mise.json
+min_version = "2026.9.5"
+
+[tool_config]
+locked = true
+
+[settings]
+lockfile = true
+
+[tools]
+# @clover: constraint=major
+go = "1.27.1"
+# Pinned to the version .golangci.yml is written against; keep in sync with the
+# go.mod tool directive.
+# @clover: constraint=major
+golangci-lint = "2.13.2"
+actionlint = "latest"
+ghalint = "latest"
+betterleaks = "latest"
+zizmor = "latest"
+rumdl = "latest"
+hadolint = "latest"
+# clover: provider=github id=hk repository=jdx/hk source=releases constraint=major cooldown=1d
+hk = "2.0.0"
+# clover: provider=github repository=gechr/clover constraint=major
+"github:gechr/clover" = "0.4.3"
+jq = "latest"
+
+[env]
+HK_MISE = 1
+MODULE = "github.com/matcra587/github-docs-mcp"
+BINARY_NAME = "github-docs-mcp"
+DIST_DIR = { default = "./bin" }
+GOTOOLCHAIN = "local"
+
+[task_config]
+includes = ["tasks.toml"]
+
+[task_templates.release]
+env.GOWORK = "off"
+
+[task_templates.release.tools]
+# @clover: constraint=major
+goreleaser = "2.18.1"

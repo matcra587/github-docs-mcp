@@ -1,0 +1,42 @@
+# Scheduled drift canary against the real docs origin. Deliberately not part
+# of PR CI: an origin outage or format drift must page the maintainer via a
+# red scheduled run, not block unrelated merges.
+name: integration
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+# No default permissions; the job requests read-only checkout access.
+permissions: {}
+
+concurrency:
+  group: integration
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live origin drift canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # checkout only
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - name: Checkout
+        # @clover: constraint=major tags=checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        # @clover: constraint=major tags=setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Live origin tests
+        run: go test -v -tags=integration -count=1 -timeout 120s -run Live ./...

@@ -1,0 +1,21 @@
+services:
+  github-docs-mcp:
+    image: ghcr.io/matcra587/github-docs-mcp:latest
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Required: the image defaults to stdio.
+      MCP_TRANSPORT: http
+      DOCS_CACHE_DIR: /cache
+      # Set when browser-based clients on other hosts must connect:
+      # MCP_ALLOWED_ORIGINS: https://example.com
+    volumes:
+      - docs-cache:/cache
+
+volumes:
+  docs-cache:

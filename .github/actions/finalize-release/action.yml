@@ -1,0 +1,86 @@
+name: Finalize public release
+description: Verify draft release signatures, attest provenance, and publish after verification
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  github-token:
+    description: Token with contents, packages, and attestations write permissions
+    required: true
+  tag:
+    description: Release tag to finalize
+    required: true
+
+  recover-signatures:
+    description: Re-sign validated assets when retrying an existing draft
+    default: 'false'
+
+# The caller guards this action by visibility and release state. It must check
+# out the release commit, install mise and Cosign, log in to GHCR, and grant id-token: write.
+runs:
+  using: composite
+  steps:
+    - name: Prepare draft release subjects
+      id: subjects
+      shell: bash --noprofile --norc -euo pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG_NAME: ${{ inputs.tag }}
+      run: mise run release:subjects
+
+    - name: Recover signatures for existing draft
+      if: inputs.recover-signatures == 'true'
+      shell: bash --noprofile --norc -euo pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG_NAME: ${{ inputs.tag }}
+        IMAGE: ghcr.io/matcra587/github-docs-mcp
+        DIGEST: ${{ steps.subjects.outputs.digest }}
+      run: mise run release:recover-signatures
+
+    - name: Verify release signatures
+      shell: bash --noprofile --norc -euo pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG_NAME: ${{ inputs.tag }}
+        IMAGE: ghcr.io/matcra587/github-docs-mcp
+        DIGEST: ${{ steps.subjects.outputs.digest }}
+      run: mise run release:verify-signatures
+
+    - name: Attest release artifact provenance
+      id: archive-attestation
+      # @clover: constraint=major tags=attest
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        github-token: ${{ inputs.github-token }}
+        subject-checksums: release-subjects/checksums.txt
+
+    - name: Attest container provenance
+      id: image-attestation
+      # @clover: constraint=major tags=attest
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        github-token: ${{ inputs.github-token }}
+        subject-name: ghcr.io/matcra587/github-docs-mcp
+        subject-digest: ${{ steps.subjects.outputs.digest }}
+        push-to-registry: true
+        # Storage records are only supported for organization-owned repos.
+        create-storage-record: false
+
+    - name: Verify artifact provenance
+      shell: bash --noprofile --norc -euo pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ARCHIVE_BUNDLE: ${{ steps.archive-attestation.outputs.bundle-path }}
+        IMAGE_BUNDLE: ${{ steps.image-attestation.outputs.bundle-path }}
+        DIGEST: ${{ steps.subjects.outputs.digest }}
+      run: mise run release:verify
+
+    - name: Publish verified draft release
+      shell: bash --noprofile --norc -euo pipefail {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG_NAME: ${{ inputs.tag }}
+      run: mise run release:finalize

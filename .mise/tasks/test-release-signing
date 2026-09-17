@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+test_dir="$(mktemp -d)"
+trap 'rm -rf "${test_dir}"' EXIT
+mkdir -p "${test_dir}/bin" "${test_dir}/release-subjects" "${test_dir}/.github/release-notes"
+cp "${project_dir}/tasks.toml" "${test_dir}/tasks.toml"
+# Execute the real tasks through mise; replace only external side effects.
+cat >"${test_dir}/mise.toml" <<'CONFIG'
+[task_config]
+includes = ["tasks.toml"]
+[task_templates.release]
+env.GOWORK = "off"
+[env]
+_.path = ["./bin"]
+CONFIG
+cat >"${test_dir}/bin/stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+command="$(basename "$0")"
+printf '%s %s\n' "${command}" "$*" >>"${TRACE}"
+[[ "${FAIL_COMMAND:-}" != "${command} ${1:-}" ]] || exit 42
+if [[ "${command} $1" == 'gh release' && "$2" == view ]]; then
+  echo "${DRAFT:-true}"
+fi
+STUB
+chmod +x "${test_dir}/bin/stub"
+for command in gh cosign goreleaser; do
+  ln -s stub "${test_dir}/bin/${command}"
+done
+export TRACE="${test_dir}/trace"
+export GITHUB_REF_NAME=v1.2.3 TAG_NAME=v1.2.3 GITHUB_REF=refs/tags/v1.2.3
+export GITHUB_REPOSITORY=example/repository GITHUB_SERVER_URL=https://github.com
+export GH_TOKEN=fixture-token IMAGE=ghcr.io/example/image DIGEST=sha256:fixture
+export MISE_TRUSTED_CONFIG_PATHS="${test_dir}"
+
+run_case() {
+  local name="$1" expected="$2" task="$3" result=0
+  : >"${TRACE}"
+  mise -C "${test_dir}" run "${task}" >"${test_dir}/log" 2>&1 || result=$?
+  if [[ ( "${expected}" == pass && ${result} != 0 ) || ( "${expected}" == fail && ${result} == 0 ) ]]; then
+    cat "${test_dir}/log"
+    echo "FAIL ${name}: unexpected exit ${result}" >&2
+    exit 1
+  fi
+  echo "PASS ${name}"
+}
+contains() { grep -Fq -- "$1" "${TRACE}"; }
+absent() { ! contains "$1"; }
+
+PUBLIC_RELEASE=false run_case private-publish pass release:publish
+contains 'goreleaser release --clean --skip=sign'
+absent '--draft'
+PUBLIC_RELEASE=true run_case public-publish pass release:publish
+contains 'goreleaser release --clean --draft'
+absent '--skip=sign'
+PUBLIC_RELEASE='' run_case unspecified-visibility-skips-signing pass release:publish
+contains '--skip=sign'
+run_case snapshot-skips-signing pass release:snapshot
+contains 'goreleaser release --snapshot --clean --skip=sign'
+printf '# Reviewed notes\n' >"${test_dir}/.github/release-notes/v1.2.3.md"
+PUBLIC_RELEASE=true run_case reviewed-notes pass release:publish
+contains '--release-notes .github/release-notes/v1.2.3.md'
+: >"${test_dir}/.github/release-notes/v1.2.3.md"
+PUBLIC_RELEASE=true run_case empty-notes-rejected fail release:publish
+absent 'goreleaser '
+
+run_case draft-signature-recovery pass release:recover-signatures
+contains 'cosign sign-blob --yes --bundle release-subjects/checksums.txt.sigstore.json release-subjects/checksums.txt'
+contains "cosign sign --yes ${IMAGE}@${DIGEST}"
+contains 'gh release upload v1.2.3 release-subjects/checksums.txt.sigstore.json'
+DRAFT=false run_case published-release-not-resigned fail release:recover-signatures
+absent 'cosign '
+FAIL_COMMAND='cosign sign-blob' run_case blob-sign-failure-stops-recovery fail release:recover-signatures
+absent 'cosign sign --yes'
+absent 'gh release upload'
+FAIL_COMMAND='cosign sign' run_case image-sign-failure-stops-upload fail release:recover-signatures
+absent 'gh release upload'
+
+run_case verify-signatures pass release:verify-signatures
+contains 'gh release download v1.2.3'
+contains 'cosign verify-blob '
+contains "cosign verify ${IMAGE}@${DIGEST}"
+contains '--certificate-identity https://github.com/example/repository/.github/workflows/release.yml@refs/tags/v1.2.3'
+contains '--certificate-oidc-issuer https://token.actions.githubusercontent.com'
+FAIL_COMMAND='gh release' run_case bundle-download-failure-stops-verification fail release:verify-signatures
+absent 'cosign '
+FAIL_COMMAND='cosign verify-blob' run_case bad-checksum-signature-stops-verification fail release:verify-signatures
+absent 'cosign verify ghcr.io/'
+FAIL_COMMAND='cosign verify' run_case bad-image-signature-fails-verification fail release:verify-signatures

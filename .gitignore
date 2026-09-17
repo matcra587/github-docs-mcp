@@ -1,0 +1,11 @@
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+/vendor/
+/github-docs-mcp
+
+# Local agent working notes (designs, plans, settings)
+/.claude/
+/.rumdl_cache/

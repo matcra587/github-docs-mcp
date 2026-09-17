@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+usage: mise run release -- [--dry-run] <version> [<commit>]
+
+Create and push the semver tag that triggers .github/workflows/release.yml.
+The version may be passed with or without the leading "v".
+<commit> defaults to HEAD; pass an already-pushed commit on main to tag a
+point behind the current tip (e.g. a patch release for an earlier commit).
+
+Prereleases are not cut by this script. The workflow accepts them (and
+GoReleaser does not move the `latest` tag for them), but tagging one
+is a deliberate enough act to do by hand.
+
+examples:
+  mise run release -- v0.8.1
+  mise run release -- --dry-run 0.8.1
+  mise run release -- 0.3.1 42463f7
+EOF
+}
+
+fail() {
+	echo "release failed: $*" >&2
+	exit 1
+}
+
+dry_run=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+	dry_run=1
+	shift
+fi
+
+if [[ $# -lt 1 || $# -gt 2 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+	usage
+	exit 2
+fi
+
+version="$1"
+ref="${2:-}"
+tag="${version#v}"
+tag="v${tag}"
+
+[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must match vMAJOR.MINOR.PATCH"
+
+branch="$(git branch --show-current)"
+[[ "$branch" == "main" ]] || fail "must release from main, currently on ${branch:-detached HEAD}"
+
+[[ -z "$(git status --porcelain)" ]] || fail "working tree must be clean"
+
+timeout 60s git fetch --tags origin +refs/heads/main:refs/remotes/origin/main || fail "timed out fetching origin/main and tags"
+
+if [[ -z "$ref" ]]; then
+	# Default: tag the current tip, which must match origin/main exactly.
+	target_sha="$(git rev-parse HEAD)"
+	origin_sha="$(git rev-parse origin/main)"
+	[[ "$target_sha" == "$origin_sha" ]] || fail "main must be up to date with origin/main"
+else
+	# Explicit commit: must already be on origin/main, so we only ever tag
+	# pushed history, never a stray local commit.
+	target_sha="$(git rev-parse --verify "${ref}^{commit}" 2>/dev/null)" || fail "cannot resolve commit: ${ref}"
+	git merge-base --is-ancestor "$target_sha" origin/main || fail "commit ${ref} (${target_sha}) is not on origin/main; push it first"
+fi
+
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+	fail "local tag already exists: ${tag}"
+fi
+
+remote_tag_status=0
+timeout 30s git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1 || remote_tag_status=$?
+case "$remote_tag_status" in
+0)
+	fail "remote tag already exists: ${tag}"
+	;;
+2) ;;
+124)
+	fail "timed out checking remote tag: ${tag}"
+	;;
+*)
+	fail "could not check remote tag ${tag} (git ls-remote exited ${remote_tag_status})"
+	;;
+esac
+
+if [[ "$target_sha" == "$(git rev-parse HEAD)" ]]; then
+	mise run release:preflight
+else
+	# Run the selected commit's own checks and build configuration.
+	(
+		preflight_dir="$(mktemp -d "${TMPDIR:-/tmp}/github-docs-release.XXXXXXXX")"
+		trap '
+			if [[ -f "$preflight_dir/checkout/.git" ]] && ! git worktree remove --force "$preflight_dir/checkout"; then
+				fail "could not remove preflight worktree: $preflight_dir/checkout"
+			fi
+			rmdir -- "$preflight_dir"
+		' EXIT
+		trap 'exit 130' INT
+		trap 'exit 143' TERM
+		git worktree add --detach "$preflight_dir/checkout" "$target_sha"
+		MISE_TRUSTED_CONFIG_PATHS="$preflight_dir/checkout" \
+			MISE_CEILING_PATHS="$preflight_dir" \
+			mise -C "$preflight_dir/checkout" run release:preflight
+	)
+fi
+
+if ((dry_run)); then
+	echo "dry run: would create annotated tag ${tag} at ${target_sha}"
+	echo "dry run: would push ${tag} to origin"
+	exit 0
+fi
+
+git tag -a "$tag" "$target_sha" -m "$tag"
+git push origin "$tag"
+
+echo "release tag pushed: ${tag}"
+echo "GitHub Actions release workflow will run for ${tag}."

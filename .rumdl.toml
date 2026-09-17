@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/rvben/rumdl/main/rumdl.schema.json
+# GitHub-flavored Markdown. Exclude generated files, local working notes and
+# captured origin fixtures from prose formatting.
+
+[global]
+flavor = "gfm"
+respect_gitignore = true
+
+exclude = [
+    ".git",
+    ".claude",
+    "AGENTS.md",
+    ".github",
+    "dist",
+    "vendor",
+    "CHANGELOG.md",
+    "internal/docs/testdata/**",
+]
+
+disable = [
+    "MD013",  # Line length - fights one-sentence-per-line style
+    "MD014",  # Commands must show output - too prescriptive
+    "MD024",  # Duplicate headings - legitimate in structured docs
+    "MD025",  # Single top-level heading - too rigid for frontmatter files
+    "MD026",  # Trailing punctuation in heading - "What is X?" is fine
+    "MD033",  # Inline HTML - GFM supports it, needed for details/br/badges
+    "MD034",  # Bare URLs - GFM auto-links them
+    "MD036",  # Emphasis as heading - high false-positive rate
+    "MD041",  # First line must be heading - breaks frontmatter
+    "MD043",  # Required heading structure - too prescriptive
+    "MD044",  # Proper name capitalisation - not worth maintaining a list
+    "MD046",  # Code block style - content-tab fences read as indented blocks
+    "MD054",  # Link style consistency - mixed inline/reference is legitimate
+    "MD059",  # Descriptive link text - too many false positives
+    "MD060",  # Table column alignment - creates diff noise
+    "MD063",  # Heading capitalisation - fights sentence-case style
+    "MD064",  # Multiple consecutive spaces - catches table alignment
+    "MD076",  # List item spacing - personal preference
+    "MD077",  # List continuation indent - too strict
+]
+
+[MD003]
+style = "atx"
+
+[MD004]
+style = "asterisk"
+
+[MD007]
+indent = 4

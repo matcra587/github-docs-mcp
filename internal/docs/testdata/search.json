@@ -1,0 +1,89 @@
+{
+    "meta": {
+        "found": {
+            "value": 914,
+            "relation": "eq"
+        },
+        "took": {
+            "query_msec": 16,
+            "total_msec": 34
+        },
+        "page": 1,
+        "size": 5
+    },
+    "hits": [
+        {
+            "id": "m1RytZ8Bo4pzgBE2bFXe",
+            "url": "/en/actions/tutorials/build-and-test-code/java-with-maven",
+            "title": "Building and testing Java with Maven",
+            "breadcrumbs": "GitHub Actions / Tutorials / Build and test code",
+            "highlights": {
+                "title": [],
+                "content": [
+                    "can extend your CI workflow to <mark>cache</mark> files and upload artifacts from a workflow run.\nGitHub-hosted runners have a tools <mark>cache</mark> with pre-installed software"
+                ],
+                "content_explicit": [
+                    "don't need to be downloaded from remote Maven repositories. You can <mark>cache dependencies</mark> simply using the setup-java action or can use cache action for custom"
+                ]
+            }
+        },
+        {
+            "id": "s1RytZ8Bo4pzgBE2XlGS",
+            "url": "/en/actions/tutorials/migrate-to-github-actions/manual-migrations/migrate-from-travis-ci",
+            "title": "Migrating from Travis CI to GitHub Actions",
+            "breadcrumbs": "GitHub Actions / Tutorials / Migrate to GitHub Actions / Manual migrations",
+            "highlights": {
+                "title": [],
+                "content": [
+                    "concurrent jobs and workflow execution times in GitHub Actions can vary <mark>depending</mark> on your GitHub plan. For more information, see Billing and usage.\nUsing"
+                ],
+                "content_explicit": [
+                    "Caching dependencies\nTravis CI and GitHub Actions let you manually <mark>cache dependencies</mark> for later reuse.\nThese examples demonstrate the cache syntax for each"
+                ]
+            }
+        },
+        {
+            "id": "mlRytZ8Bo4pzgBE2bFXe",
+            "url": "/en/actions/tutorials/build-and-test-code/java-with-gradle",
+            "title": "Building and testing Java with Gradle",
+            "breadcrumbs": "GitHub Actions / Tutorials / Build and test code",
+            "highlights": {
+                "title": [],
+                "content": [
+                    "can extend your CI workflow to <mark>cache</mark> files and upload artifacts from a workflow run.\nGitHub-hosted runners have a tools <mark>cache</mark> with pre-installed software"
+                ],
+                "content_explicit": []
+            }
+        },
+        {
+            "id": "B1RytZ8Bo4pzgBE2bFbe",
+            "url": "/en/actions/concepts/workflows-and-actions/dependency-caching",
+            "title": "Dependency caching",
+            "breadcrumbs": "GitHub Actions / Concepts / Workflows and actions",
+            "highlights": {
+                "title": [
+                    "<mark>Dependency</mark> <mark>caching</mark>"
+                ],
+                "content": [
+                    "<mark>Dependency</mark> <mark>caching</mark>\nLearn about <mark>dependency</mark> <mark>caching</mark> for workflow speed and efficiency.\nAbout workflow <mark>dependency</mark> <mark>caching</mark>\nWorkflow runs often reuse the same"
+                ],
+                "content_explicit": []
+            }
+        },
+        {
+            "id": "N1RytZ8Bo4pzgBE2clnB",
+            "url": "/en/actions/tutorials/build-and-test-code/powershell",
+            "title": "Building and testing PowerShell",
+            "breadcrumbs": "GitHub Actions / Tutorials / Build and test code",
+            "highlights": {
+                "title": [],
+                "content": [
+                    "use Pester, install <mark>dependencies</mark>, test your module, and publish to the PowerShell Gallery.\nGitHub-hosted runners have a tools <mark>cache</mark> with pre-installed software"
+                ],
+                "content_explicit": [
+                    "versions by using Install-Module with -MaximumVersion.\nYou can also <mark>cache dependencies</mark> to speed up your workflow. For more information, see Dependency caching"
+                ]
+            }
+        }
+    ]
+}

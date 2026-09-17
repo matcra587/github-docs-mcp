@@ -1,0 +1,32 @@
+---
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly advisory sweep. New CVEs land without commits, so the only way to
+    # hear about one in an unchanged dependency is to go looking.
+    - cron: "0 12 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  security:
+    name: Security
+    # Adds what `mise run ci` cannot: CodeQL, dependency review, and SARIF into
+    # code scanning. Its actionlint and zizmor overlap the local gate, but run
+    # online audits the offline local run skips, so they are not redundant.
+    # @clover: constraint=major tag-prefix=security/ tags=actions
+    uses: matcra587/github-actions/.github/workflows/security.yml@09a32f29285295a6b9f604ed98098ea409b899b4 # security/v0.4.2
+    permissions:
+      contents: read
+      security-events: write # SARIF + CodeQL uploads to code scanning.
+    with:
+      # Upload supported scanner results to GitHub code scanning.
+      sarif: true

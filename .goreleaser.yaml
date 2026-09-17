@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: github-docs-mcp
+report_sizes: true
+
+release:
+  prerelease: auto
+  extra_files:
+    - glob: dist/digests.txt
+  # GoReleaser writes digests.txt after pushing the multi-platform images and
+  # before publishing release notes. Use those manifest digests, not local IDs.
+  footer: |
+    {{- $digests := split (mustReadFile "dist/digests.txt") "\n" -}}
+    {{- printf "## Docker Manifests\n\n### github-docs-mcp\n\n" -}}
+    {{- range $tag := list .Tag "latest" -}}
+      {{- if or (eq $tag $.Tag) (not $.Prerelease) -}}
+        {{- range $line := $digests -}}
+          {{- $entry := split $line "  " -}}
+          {{- if eq (len $entry) 2 -}}
+            {{- if eq (index $entry 1) (printf "ghcr.io/matcra587/github-docs-mcp:%s" $tag) -}}
+              {{- printf "`%s@sha256:%s`\n\n" (index $entry 1) (index $entry 0) -}}
+            {{- end -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+    Supports Linux amd64 and arm64. Binary archives and `checksums.txt` are attached to this release.
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: github-docs-mcp
+    main: ./cmd/github-docs-mcp
+    binary: github-docs-mcp
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # The release matrix is compiled on every pull request by release:snapshot.
+    # macOS binaries target Apple Silicon.
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    ids:
+      - github-docs-mcp
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+      - CONTRIBUTING.md
+      - CHANGELOG.md
+      - THIRD_PARTY_NOTICES.md
+      - licenses/github-docs-CC-BY-4.0.txt
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+# Ship an image for container clients and archives for clients that run the
+# binary directly from PATH.
+dockers_v2:
+  - id: github-docs-mcp
+    ids:
+      - github-docs-mcp
+    images:
+      - ghcr.io/matcra587/github-docs-mcp
+    tags:
+      - "v{{ .Version }}"
+      # A prerelease must not move `latest`.
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    # buildx cannot attach attestations to an image it loads into the local
+    # daemon, and snapshot builds load rather than push. Releases push, so
+    # they keep both.
+    sbom: "{{ not .IsSnapshot }}"
+    flags:
+      - "--provenance={{ if .IsSnapshot }}false{{ else }}mode=max{{ end }}"
+    # Labels land on the per-platform image, annotations on the multi-arch
+    # index. ghcr reads the index, so `source` has to be in both for the
+    # package to link back to this repository, and every other key has the
+    # same reason to be in both, hence one anchored map rather than two that
+    # can drift.
+    labels: &oci_metadata
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: MCP server exposing the GitHub documentation via full-text search and section retrieval
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+      org.opencontainers.image.source: &repo_url https://github.com/matcra587/github-docs-mcp
+      org.opencontainers.image.url: *repo_url
+      org.opencontainers.image.documentation: https://github.com/matcra587/github-docs-mcp#readme
+      org.opencontainers.image.base.name: "{{ .BaseImage }}"
+      org.opencontainers.image.base.digest: "{{ .BaseImageDigest }}"
+      org.opencontainers.image.licenses: MIT
+    annotations: *oci_metadata
+
+# Fresh public releases sign through GoReleaser. Private releases and local
+# snapshots pass --skip=sign so they never contact signing services.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: '${artifact}.sigstore.json'
+    args: [sign-blob, '--yes', '--bundle=${signature}', '${artifact}']
+
+docker_signs:
+  - args: [sign, '--yes', '${artifact}@${digest}']
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  format: "{{ .Message }}"
+  groups:
+    - title: Breaking changes
+      regexp: '^[[:word:]]+(\([^)]*\))?!:'
+      order: 0
+    - title: Features
+      regexp: '^feat(\([^)]*\))?:'
+      order: 1
+    - title: Fixes
+      regexp: '^fix(\([^)]*\))?:'
+      order: 2
+    - title: Performance
+      regexp: '^perf(\([^)]*\))?:'
+      order: 3
+    - title: Dependencies
+      regexp: '^(build|chore|ci)\(deps[^)]*\):'
+      order: 4
+    - title: Maintenance
+      order: 5
+  filters:
+    exclude:
+      # Keep breaking changes (the ! marker) even for these commit types.
+      - '^(docs|style|test)(\([^)]*\))?:'

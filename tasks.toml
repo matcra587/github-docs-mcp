@@ -1,0 +1,221 @@
+#:schema https://mise.en.dev/schema/mise-task.json
+
+[default]
+description = "List available tasks"
+quiet = true
+run = "mise tasks"
+
+[check]
+description = "Run hk checks and offline race tests"
+run = ["hk check --all", { task = "test" }]
+
+[ci]
+extends = "release"
+description = "Run the full CI gate with isolated Go settings"
+env.GOWORK = "off"
+env.GOFLAGS = "-count=1"
+run = [{ task = "check" }, { task = "release:check" }, { task = "release:test" }, { task = "build:cross" }]
+
+[fix]
+description = "Apply hk fixes without staging changes"
+run = "hk fix --all --no-stage"
+
+[build]
+description = "Build the binary"
+alias = "b"
+run = 'CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o "${DIST_DIR}/${BINARY_NAME}" "./cmd/${BINARY_NAME}"'
+
+["build:cross"]
+description = "Compile every package on every platform the release ships"
+# Not a mirror of .goreleaser.yaml's `builds` matrix, and does not need to
+# track it: CI already compiles the authoritative matrix on every pull request
+# via `release:snapshot`. What this adds is breadth: GoReleaser only builds
+# `./cmd/github-docs-mcp`, so `./...` is the only thing that cross-compiles
+# cmd/fixture-server and the internal packages.
+# Only compilation is checked; a cross-built binary cannot be run here, and
+# there is no platform-specific code to run anyway. That is the point: this
+# catches the day someone adds some.
+# Runs under sh, not bash, so no `set -o pipefail` here. There are no pipes, and
+# the explicit `|| exit 1` is what stops the loop swallowing a failed target.
+run = """
+for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64 windows/arm64; do
+  printf '%-16s' "$target"
+  GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -o /dev/null ./... || exit 1
+  echo ok
+done
+"""
+
+[run]
+description = "Build and run"
+alias = "r"
+depends = ["build"]
+raw_args = true
+run = '"${DIST_DIR}/${BINARY_NAME}"'
+
+[test]
+description = "Run tests with race detection and shuffle"
+alias = "t"
+env = { CGO_ENABLED = "1" }
+run = "go test -race -shuffle=on ./..."
+
+["test:integration"]
+description = "Run live-origin integration tests"
+run = "go test -v -tags=integration -count=1 -timeout 120s ./..."
+
+[fuzz]
+description = "Run fuzz targets (30s each)"
+run = [
+  "go test -fuzz=FuzzParseIndex -fuzztime=30s ./internal/docs",
+  "go test -fuzz=FuzzParsePageList -fuzztime=30s ./internal/docs",
+  "go test -fuzz=FuzzExtractHeading -fuzztime=30s ./internal/docs",
+]
+
+["fixture-serve"]
+description = "Serve docs fixtures on :9999 for local dev"
+run = "go run ./cmd/fixture-server"
+
+["clover:check"]
+description = "Validate version tracking annotations"
+run = "hk check --all --step clover"
+
+["release:check"]
+extends = "release"
+description = "Validate GoReleaser configuration"
+# healthcheck requires Cosign even when signing is skipped. Snapshot CI
+# exercises the build tools; Cosign is installed only for public releases.
+run = "goreleaser check"
+
+["release:preflight"]
+extends = "release"
+description = "Run the full local preflight used before publishing releases"
+# `ci` already runs release:check, so listing it here too would run
+# `goreleaser check` twice.
+run = [{ task = "ci" }, { task = "release:build" }]
+
+["release:test"]
+description = "Test release validation and signing orchestration offline"
+run = [{ task = "release:test-subjects" }, { task = "release:test-signing" }]
+
+["release:test-subjects"]
+description = "Test release subject validation offline (requires Bash and GNU coreutils)"
+file = ".mise/tasks/test-release-subjects"
+
+["release:test-signing"]
+description = "Test release tasks with signing and publishing commands substituted"
+file = ".mise/tasks/test-release-signing"
+
+[release]
+extends = "release"
+description = "Validate, tag and push a release"
+raw_args = true
+file = ".mise/tasks/release"
+
+["release:build"]
+extends = "release"
+description = "Build binaries with GoReleaser without publishing"
+run = "goreleaser build --snapshot --clean"
+
+["release:snapshot"]
+extends = "release"
+description = "Build a full snapshot release locally, including the image"
+# `docker build .` cannot build this image: the Dockerfile COPYs binaries out
+# of a context GoReleaser stages. A snapshot builds one image per platform,
+# tagged `v<version>-next-<arch>`, and loads them into the local daemon.
+alias = "docker"
+run = "goreleaser release --snapshot --clean --skip=sign"
+
+[clean]
+description = "Remove build and coverage outputs"
+run = "rm -rf bin dist coverage.out"
+
+["release:publish"]
+extends = "release"
+description = "Publish release artifacts from CI"
+run = '''
+set -eu
+tag="${GITHUB_REF_NAME:-$(git describe --tags --exact-match HEAD)}"
+notes=".github/release-notes/${tag}.md"
+set -- release --clean
+# Public releases remain drafts until signatures and provenance are complete.
+if [ "${PUBLIC_RELEASE:-false}" = "true" ]; then
+  set -- "$@" --draft
+else
+  set -- "$@" --skip=sign
+fi
+if [ -f "$notes" ]; then
+  test -s "$notes" || { echo "Release notes are empty: $notes" >&2; exit 1; }
+  set -- "$@" --release-notes "$notes"
+fi
+exec goreleaser "$@"
+'''
+
+["hooks:install"]
+description = "Install Git hooks using the pinned mise tools"
+run = "hk install --mise"
+
+["release:state"]
+description = "Read release state for CI"
+shell = "bash -euo pipefail -c"
+run = '''
+# A failed API request must not be mistaken for an absent release.
+releases="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[] | {tag_name, draft}')"
+state="$(jq -sr --arg tag "${TAG_NAME}" 'map(select(.tag_name == $tag)) | if length == 0 then "absent" elif .[0].draft then "draft" else "published" end' <<<"${releases}")"
+echo "state=${state}" >>"${GITHUB_OUTPUT}"
+if [[ "${state}" != absent ]]; then
+  echo "exists=true" >>"${GITHUB_OUTPUT}"
+  echo "release ${TAG_NAME} already exists; skipping GoReleaser publish"
+else
+  echo "exists=false" >>"${GITHUB_OUTPUT}"
+fi
+'''
+
+["release:recover-signatures"]
+description = "Recover signatures on validated draft assets without rebuilding (requires CI OIDC)"
+shell = "bash -euo pipefail -c"
+run = '''
+# Only the existing-draft path calls this task; fresh releases use GoReleaser.
+[[ "$(gh release view "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" == true ]]
+cosign sign-blob --yes --bundle release-subjects/checksums.txt.sigstore.json release-subjects/checksums.txt
+cosign sign --yes "${IMAGE}@${DIGEST}"
+gh release upload "${TAG_NAME}" release-subjects/checksums.txt.sigstore.json --repo "${GITHUB_REPOSITORY}" --clobber
+'''
+
+["release:verify-signatures"]
+description = "Download and verify the release checksum bundle and image signature"
+shell = "bash -euo pipefail -c"
+run = '''
+gh release download "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --dir release-subjects \
+  --pattern checksums.txt.sigstore.json --clobber
+identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+cosign verify-blob --bundle release-subjects/checksums.txt.sigstore.json \
+  --certificate-identity "${identity}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  release-subjects/checksums.txt
+cosign verify "${IMAGE}@${DIGEST}" \
+  --certificate-identity "${identity}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+'''
+
+["release:verify"]
+description = "Verify archive and image provenance for the release workflow"
+shell = "bash -euo pipefail -c"
+run = '''
+policy=(--repo "${GITHUB_REPOSITORY}"
+  --cert-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+  --cert-oidc-issuer https://token.actions.githubusercontent.com
+  --source-ref "${GITHUB_REF}" --source-digest "$(git rev-parse HEAD)"
+  --deny-self-hosted-runners)
+for archive in release-subjects/*.tar.gz release-subjects/*.zip; do
+  gh attestation verify "${archive}" --bundle "${ARCHIVE_BUNDLE}" "${policy[@]}"
+done
+gh attestation verify "oci://ghcr.io/matcra587/github-docs-mcp@${DIGEST}" \
+  --bundle "${IMAGE_BUNDLE}" "${policy[@]}"
+'''
+
+["release:subjects"]
+description = "Download and validate draft release subjects for attestation"
+file = ".mise/tasks/release-prepare-subjects"
+
+["release:finalize"]
+description = "Publish the draft after CI has verified signatures and provenance"
+run = 'gh release edit "${TAG_NAME:?}" --repo "${GITHUB_REPOSITORY:?}" --draft=false'

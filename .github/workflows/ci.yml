@@ -1,0 +1,186 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No default permissions; each job requests read-only checkout access.
+permissions: {}
+
+# Pull requests cancel superseded runs per ref. Pushes to main get one group
+# per commit, so a rapid series of merges never cancels the run a release tag
+# is waiting on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Full check suite (mise run ci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout only
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - name: Checkout
+        # @clover: constraint=major tags=checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        # @clover: constraint=major tags=mise-action
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # --locked pins every tool to mise.lock. Without it CI resolved
+          # `latest` for hadolint, zizmor and friends on every run, so a
+          # maintainer's green local check could fail here on a linter that
+          # had gained a rule overnight.
+          install_args: --locked
+          cache: true
+
+      # GHA caches are immutable, so a key made only of dependency and
+      # toolchain pins never refreshes as our own source changes, and the
+      # build-cache hit rate decays until go.sum next moves. The UTC date
+      # gives it a churn component; the restore-keys fall back to the most
+      # recent save when it rolls over.
+      - name: Compute cache date
+        id: cache-date
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Go caches
+        # @clover: constraint=major tags=cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'mise.lock') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum', 'mise.lock') }}-
+            go-${{ runner.os }}-
+
+      # Exactly what a maintainer runs locally: fmt, lint, rumdl, vet, tests,
+      # tidy drift, workflow lint (actionlint + zizmor), hadolint, govulncheck
+      # and a cross-platform build. CI-parity by construction.
+      #
+      # -count=1 disables Go's test-result cache (build caching is unaffected).
+      # The suites here read committed fixtures, and Go hashes opened files by
+      # mtime (golang/go#58571), which a fresh checkout resets, so a restored
+      # result cache would be decided by checkout order rather than content.
+      - name: Run CI checks
+        env:
+          GOFLAGS: -count=1
+        run: mise run ci
+
+  docker:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout only
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - name: Checkout
+        # @clover: constraint=major tags=checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        # @clover: constraint=major tags=mise-action
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          install_args: --locked
+          cache: true
+
+      # No QEMU step: the image has no RUN instructions, so assembling the
+      # linux/arm64 variant executes nothing and needs no emulation: GoReleaser
+      # has already cross-compiled the binary, and buildx only has to COPY it.
+      # This job builds arm64 on every push, so if that ever stops being true
+      # it fails here rather than at tag time.
+      - name: Set up Buildx
+        # @clover: constraint=major tags=setup-buildx-action
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      # `docker build .` cannot build this image: GoReleaser stages the
+      # cross-compiled binaries into a temporary context the Dockerfile COPYs
+      # from. A snapshot builds one image per platform instead of a manifest,
+      # which is what makes the amd64 one loadable, and so scannable and
+      # runnable below. Also the only place linux/arm64 is built before a tag.
+      - name: Build image via GoReleaser snapshot
+        run: mise run release:snapshot
+
+      # The snapshot version is computed by GoReleaser (`{{ incpatch }}-next`),
+      # so it cannot be hardcoded here; read back the version it settled on.
+      - name: Resolve snapshot image tag
+        id: image
+        run: |
+          version="$(jq -r .version dist/metadata.json)"
+          echo "ref=ghcr.io/matcra587/github-docs-mcp:v${version}-amd64" >> "$GITHUB_OUTPUT"
+
+      # Building and scanning proves the image assembles and is free of known
+      # CVEs. Neither proves it starts: a bad ENTRYPOINT path, a binary built
+      # for the wrong platform, or a permission error under uid 65532 all pass
+      # both and fail on first pull.
+      #
+      # Both transports are exercised because both are load-bearing and they
+      # fail independently. stdio is the image default and the invocation the
+      # documented client configuration uses (`docker run -i <image>`, no environment);
+      # http is what docker-compose.yml asks for and the only one serving
+      # /healthz.
+      - name: Smoke-test image over stdio
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          # The trailing sleep is load-bearing: closing stdin immediately makes
+          # the server see EOF and shut down before it has written the reply,
+          # so the probe reads nothing and the assertion below fails.
+          reply="$(
+            {
+              printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+              sleep 3
+            } | timeout 30 docker run --rm -i "$IMAGE" 2>/dev/null
+          )"
+          echo "$reply"
+          echo "$reply" | jq -e '.result.serverInfo.name == "github-docs"' >/dev/null
+
+      - name: Smoke-test image over http
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          docker run --detach --name smoke --env MCP_TRANSPORT=http \
+            --publish 127.0.0.1:8080:8080 "$IMAGE"
+          trap 'docker logs smoke || true; docker rm --force smoke' EXIT
+          for _ in $(seq 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "healthz never answered" >&2
+          exit 1
+
+      # Digest-pinned like every action here. A floating scanner tag lets a
+      # third party decide what runs against our image, and silently changes
+      # what a green run means.
+      - name: Scan image with Trivy
+        env:
+          # clover: provider=docker repository=aquasec/trivy constraint=major tags=trivy
+          TRIVY: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            "${TRIVY}" image \
+            --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed \
+            "$IMAGE"

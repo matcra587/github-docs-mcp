@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Composite input metadata does not enforce required values at runtime.
+: "${GH_TOKEN:?github-token input is required}" "${TAG_NAME:?tag input is required}"
+
+# Download the draft on both initial runs and retries. Do not rebuild or attest
+# a different set of bytes when a previous signing step failed.
+[[ "${TAG_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+[[ "$(gh release view "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" == true ]]
+mkdir release-subjects
+gh release download "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --dir release-subjects \
+  --pattern checksums.txt --pattern digests.txt --pattern '*.tar.gz' --pattern '*.zip'
+cd release-subjects
+
+# Accept precisely the five release archives. Reject extra subjects, malformed
+# hashes and paths before handing the manifest to sha256sum or actions/attest.
+version="${TAG_NAME#v}"
+expected=()
+for platform in darwin_arm64 linux_amd64 linux_arm64 windows_amd64 windows_arm64; do
+  extension=tar.gz
+  [[ "${platform}" != windows_* ]] || extension=zip
+  expected+=("github-docs-mcp_${version}_${platform}.${extension}")
+done
+mapfile -t entries < checksums.txt
+[[ ${#entries[@]} -eq ${#expected[@]} ]]
+for name in "${expected[@]}"; do
+  matches=0
+  for entry in "${entries[@]}"; do
+    if [[ "${entry}" =~ ^[0-9a-f]{64}"  "(.*)$ && "${BASH_REMATCH[1]}" == "${name}" ]]; then
+      matches=$((matches + 1))
+    fi
+  done
+  [[ ${matches} == 1 ]]
+done
+sha256sum --check --strict checksums.txt
+
+# GoReleaser records the pushed multi-platform index digest, not a platform
+# image ID. Select the versioned tag, never the moving latest alias.
+image="ghcr.io/matcra587/github-docs-mcp:${TAG_NAME}"
+mapfile -t digests < <(awk -v image="${image}" '$2 == image { print $1 }' digests.txt)
+[[ ${#digests[@]} == 1 && "${digests[0]}" =~ ^[0-9a-f]{64}$ ]]
+printf 'digest=sha256:%s\n' "${digests[0]}" >>"${GITHUB_OUTPUT}"

@@ -1,0 +1,143 @@
+// clover: from=hk find=download/v<version>/hk@<version>
+amends "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Config.pkl"
+// clover: from=hk find=download/v<version>/hk@<version>
+import "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Builtins.pkl"
+
+// clover: from=hk
+min_hk_version = "2.0.0"
+
+steps {
+    ["gofumpt"] = (Builtins.go_fumpt) {
+        check = "files=$(go tool gofumpt -l {{ files }}) && test -z \"$files\""
+        check_diff = null
+        check_list_files = null
+        fix = "go tool gofumpt -w {{ files }}"
+        // The builtin tests run outside the repository. Preserve the Go-owned
+        // formatter and its checksums in those isolated test modules.
+        tests {
+            ["check bad file"] {
+                write {
+                    ["go.mod"] = if (read("go.mod") is String) read("go.mod") else read("go.mod").text
+                    ["go.sum"] = if (read("go.sum") is String) read("go.sum") else read("go.sum").text
+                }
+            }
+            ["check good file"] {
+                write {
+                    ["go.mod"] = if (read("go.mod") is String) read("go.mod") else read("go.mod").text
+                    ["go.sum"] = if (read("go.sum") is String) read("go.sum") else read("go.sum").text
+                }
+            }
+            ["fix bad file"] {
+                write {
+                    ["go.mod"] = if (read("go.mod") is String) read("go.mod") else read("go.mod").text
+                    ["go.sum"] = if (read("go.sum") is String) read("go.sum") else read("go.sum").text
+                }
+            }
+            ["fix good file"] {
+                write {
+                    ["go.mod"] = if (read("go.mod") is String) read("go.mod") else read("go.mod").text
+                    ["go.sum"] = if (read("go.sum") is String) read("go.sum") else read("go.sum").text
+                }
+            }
+        }
+    }
+    ["rumdl"] = (Builtins.rumdl) {
+        glob = List("**/*.md", "**/*.markdown", ".rumdl.toml")
+        check = new CommandSpec {
+            command = "rumdl check {% if '.rumdl.toml' in files_list %}.{% else %}{{files}}{% endif %}"
+            effect = "read"
+        }
+        check_diff = null
+        check_after_diff = false
+        fix = new CommandSpec {
+            command = "rumdl check --fix {% if '.rumdl.toml' in files_list %}.{% else %}{{files}}{% endif %}"
+            effect = "write"
+        }
+        // Fixtures must stay byte-exact copies of the docs origin.
+        exclude = "internal/docs/testdata/**"
+    }
+    ["hadolint"] = Builtins.hadolint
+    ["actionlint"] = Builtins.actionlint
+    // Policy checks actionlint and zizmor do not make. It was a missing
+    // timeout-minutes on every job that prompted adding this.
+    ["ghalint-workflow"] = Builtins.ghalint_workflow
+    ["zizmor"] = (Builtins.zizmor) {
+        check = new CommandSpec {
+            command = "zizmor --no-progress --persona pedantic {{files}}"
+            effect = "read"
+        }
+        check_diff = null
+        check_after_diff = false
+        fix = new CommandSpec {
+            command = "zizmor --no-progress --persona pedantic --fix {{files}}"
+            effect = "write"
+        }
+    }
+    ["betterleaks"] = Builtins.betterleaks
+    ["clover"] = new Step {
+        check = new CommandSpec {
+            command = "clover lint && clover fmt --check && clover annotate --check"
+            effect = "read"
+        }
+    }
+    ["hk-config"] = new Step {
+        glob = List("hk.pkl", "go.mod", "go.sum", ".mise.toml", "mise.lock", "tasks.toml")
+        check = new CommandSpec {
+            command = "mise tasks validate && hk validate && hk test --step gofumpt"
+            effect = "write"
+        }
+    }
+}
+
+local goInputs = List("**/*.go", "go.mod", "go.sum", "hk.pkl", ".mise.toml", "mise.lock")
+local moduleChecks = new Mapping<String, Step> {
+    ["golangci-lint"] = (Builtins.golangci_lint) {
+        glob = goInputs + List(".golangci.yml")
+        exclusive = true
+    }
+    ["go-vet"] = (Builtins.go_vet) {
+        glob = goInputs
+        exclusive = true
+    }
+    ["go-mod-tidy"] = new Step {
+        glob = goInputs
+        check = new CommandSpec {
+            command = "go mod tidy -diff"
+            effect = "write"
+        }
+        exclusive = true
+    }
+    ["govulncheck"] = new Step {
+        glob = goInputs
+        check = new CommandSpec {
+            command = "go tool govulncheck ./..."
+            effect = "write"
+        }
+        exclusive = true
+    }
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+    }
+    ["pre-push"] {
+        steps = (module.steps) {
+            for (name, step in moduleChecks) { [name] = step }
+        }
+    }
+    ["check"] { steps = moduleChecks }
+    ["fix"] {
+        stage = false
+        steps { ["golangci-lint"] = moduleChecks["golangci-lint"] }
+    }
+    ["commit-msg"] {
+        steps {
+            ["conventional"] = Builtins.check_conventional_commit
+            ["betterleaks"] = new Step {
+                check = "betterleaks stdin --no-banner < {{commit_msg_file}}"
+            }
+        }
+    }
+}

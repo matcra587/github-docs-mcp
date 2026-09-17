@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script="$(cd "$(dirname "$0")" && pwd)/release-prepare-subjects"
+test_dir="$(mktemp -d)"
+trap 'rm -rf "${test_dir}"' EXIT
+mkdir "${test_dir}/bin" "${test_dir}/assets"
+export FIXTURE_ASSETS="${test_dir}/assets"
+export TAG_NAME=v1.2.3 GITHUB_REPOSITORY=example/repository
+export GH_TOKEN=fixture-token
+export PATH="${test_dir}/bin:${PATH}"
+
+# Only release metadata and downloads are mocked. The real helper, checksum
+# utility, manifest validation, and GitHub output handling run in every case.
+cat >"${test_dir}/bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  'release view') echo "${FIXTURE_DRAFT:-true}" ;;
+  'release download') cp "${FIXTURE_ASSETS}/"* release-subjects/ ;;
+  *) exit 90 ;;
+esac
+MOCK
+chmod +x "${test_dir}/bin/gh"
+
+for platform in darwin_arm64 linux_amd64 linux_arm64 windows_amd64 windows_arm64; do
+  extension=tar.gz
+  [[ "${platform}" != windows_* ]] || extension=zip
+  printf 'test archive %s\n' "${platform}" >"${FIXTURE_ASSETS}/github-docs-mcp_1.2.3_${platform}.${extension}"
+done
+(
+  cd "${FIXTURE_ASSETS}"
+  sha256sum github-docs-mcp_* >checksums.txt
+)
+printf '%064d  ghcr.io/matcra587/github-docs-mcp:v1.2.3\n' 1 >"${FIXTURE_ASSETS}/digests.txt"
+cp "${FIXTURE_ASSETS}/checksums.txt" "${test_dir}/checksums.original"
+cp "${FIXTURE_ASSETS}/digests.txt" "${test_dir}/digests.original"
+
+run_case() {
+  local name="$1" expected="$2" result=0
+  mkdir "${test_dir}/${name}"
+  export GITHUB_OUTPUT="${test_dir}/${name}/output"
+  (cd "${test_dir}/${name}" && bash "${script}") >"${test_dir}/${name}/log" 2>&1 || result=$?
+  if [[ "${expected}" == pass ]]; then
+    if [[ ${result} != 0 ]] || ! grep -qx 'digest=sha256:0000000000000000000000000000000000000000000000000000000000000001' "${GITHUB_OUTPUT}"; then
+      cat "${test_dir}/${name}/log"
+      echo "FAIL ${name}" >&2
+      exit 1
+    fi
+  elif [[ ${result} == 0 || -s "${GITHUB_OUTPUT}" ]]; then
+    echo "FAIL ${name}: invalid subjects accepted" >&2
+    exit 1
+  fi
+  echo "PASS ${name}"
+}
+
+run_case valid-draft pass
+run_case retry-same-assets pass
+GH_TOKEN='' run_case missing-token fail
+TAG_NAME='' run_case missing-tag fail
+FIXTURE_DRAFT=false run_case published-release fail
+printf 'tampered\n' >>"${FIXTURE_ASSETS}/github-docs-mcp_1.2.3_linux_amd64.tar.gz"
+run_case tampered-archive fail
+printf 'test archive linux_amd64\n' >"${FIXTURE_ASSETS}/github-docs-mcp_1.2.3_linux_amd64.tar.gz"
+sed -i '1d' "${FIXTURE_ASSETS}/checksums.txt"
+run_case missing-checksum fail
+cp "${test_dir}/checksums.original" "${FIXTURE_ASSETS}/checksums.txt"
+head -1 "${test_dir}/checksums.original" >>"${FIXTURE_ASSETS}/checksums.txt"
+run_case duplicate-checksum fail
+cp "${test_dir}/checksums.original" "${FIXTURE_ASSETS}/checksums.txt"
+sed -i 's/github-docs-mcp_/..\/github-docs-mcp_/' "${FIXTURE_ASSETS}/checksums.txt"
+run_case unsafe-path fail
+cp "${test_dir}/checksums.original" "${FIXTURE_ASSETS}/checksums.txt"
+sed -i 's/v1.2.3/latest/' "${FIXTURE_ASSETS}/digests.txt"
+run_case latest-only fail
+cp "${test_dir}/digests.original" "${FIXTURE_ASSETS}/digests.txt"
+cat "${test_dir}/digests.original" >>"${FIXTURE_ASSETS}/digests.txt"
+run_case ambiguous-digest fail
+printf 'not-a-digest  ghcr.io/matcra587/github-docs-mcp:v1.2.3\n' >"${FIXTURE_ASSETS}/digests.txt"
+run_case invalid-digest fail

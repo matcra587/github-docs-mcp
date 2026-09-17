@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/gechr/clover/v0.4.3/internal/config/schema.json
+required-version: ">=0.4.3"
+
+# Leave generated files, bundled skills and sensitive files outside update scans.
+paths:
+  exclude:
+    - "**/vendor/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/testdata/**"
+    - "**/fixtures/**"
+    - "**/.agents/**"
+    - "**/.claude/**"
+    - "**/.env"
+    - "**/.env.*"
+    - "**/secrets/**"
+    - "**/credentials/**"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.npmrc"
+    - "**/.netrc"
+    - "**/go.sum"
+    - "**/*.lock"
+    - "**/package-lock.json"
+    - "**/skills-lock.json"
+    - "specs/**"
+    - "skills/**"
+    - "**/AGENTS.md"
+    - "**/CLAUDE.md"
+    - "**/CHANGELOG.md"

@@ -1,0 +1,4 @@
+# betterleaks reads the copyright holder's name as a personal identifier. A
+# licence has to name one. Pinned to the exact finding rather than the path, so
+# anything else in LICENSE still fails the hook.
+LICENSE:personal-identifiers:3
