@@ -152,7 +152,12 @@ func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, i
 			src = " [matched page content]"
 		}
 
-		fmt.Fprintf(&b, "%s - %s%s\n  %s\n", h.Doc.Slug, h.Doc.Title, src, h.Snippet)
+		size := " [page bytes: unknown]"
+		if h.PageBytes != nil {
+			size = fmt.Sprintf(" [cached page bytes: %d]", *h.PageBytes)
+		}
+
+		fmt.Fprintf(&b, "%s - %s%s%s\n  %s\n", h.Doc.Slug, h.Doc.Title, src, size, h.Snippet)
 	}
 
 	return textResult(b.String()), nil, nil

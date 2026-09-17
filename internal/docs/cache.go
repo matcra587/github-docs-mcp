@@ -144,3 +144,19 @@ func (c *Cache) putSource(key string, value []byte, ttl time.Duration, storedAt 
 		c.curBytes -= int64(len(e.value))
 	}
 }
+
+// Size returns the stored page size without copying its body or changing LRU order.
+// A stale copy is still useful as a size hint, not a promise about the origin.
+func (c *Cache) Size(key string) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	el, ok := c.entries[key]
+	if !ok {
+		return 0, false
+	}
+
+	e := el.Value.(*cacheEntry) //nolint:forcetypeassert,errcheck // list only holds *cacheEntry
+
+	return len(e.value), true
+}
