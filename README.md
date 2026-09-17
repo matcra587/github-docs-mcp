@@ -174,6 +174,18 @@ Every knob is an environment variable with a flag override (flag wins).
 | `DOCS_CACHE_DIR` | `-cache-dir` | unset (memory only) | opt-in disk cache, survives restarts |
 | `LOG_LEVEL` | `-log-level` | `info` | slog level; JSON logs on stderr |
 
+With `-log-level debug`, stderr includes cache decisions (`hit`, `miss`,
+`expired`, `stale-serve`, `write`, `write-skipped`, `write-failed`, `eviction`)
+with the entry key, source and age. Tool results also include `_meta.cache`,
+an array containing the final decision for each catalogue or page entry used.
+Each entry has `key`, `status`, `source`, `age_ms` and `remaining_ttl_ms`.
+Missing entries have null age and TTL; expired entries have zero remaining TTL.
+A `miss` describes the entry before fetching. The source `disk` means the entry
+was hydrated from disk at startup; subsequent writes use `memory`. Search
+results themselves are not cached: `search` reports `bypass` for origin results
+or `fallback` for local results, with null age and TTL. Offline results also
+include decisions for cached page bodies used to produce returned snippets.
+
 No credentials are needed or accepted. These docs endpoints are public and,
 unlike `api.github.com`, publish no `x-ratelimit-*` headers; the outbound token
 bucket plus 429/`Retry-After` handling is what keeps this a good citizen.

@@ -96,7 +96,15 @@ func errorResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
 
-func (s *Server) handleListDocs(ctx context.Context, _ *mcp.CallToolRequest, in listDocsInput) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleListDocs(ctx context.Context, _ *mcp.CallToolRequest, in listDocsInput) (result *mcp.CallToolResult, output any, err error) {
+	ctx, trace := docs.TraceCache(ctx)
+
+	defer func() {
+		if result != nil {
+			result.Meta = mcp.Meta{"cache": trace.Decisions()}
+		}
+	}()
+
 	limit := clampLimit(in.Limit, listLimitDefault, listLimitMax)
 
 	entries, err := s.svc.List(ctx, in.Section, limit)
@@ -116,7 +124,15 @@ func (s *Server) handleListDocs(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return textResult(b.String()), nil, nil
 }
 
-func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, in searchDocsInput) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, in searchDocsInput) (result *mcp.CallToolResult, output any, err error) {
+	ctx, trace := docs.TraceCache(ctx)
+
+	defer func() {
+		if result != nil {
+			result.Meta = mcp.Meta{"cache": trace.Decisions()}
+		}
+	}()
+
 	limit := clampLimit(in.Limit, searchLimitDefault, searchLimitMax)
 
 	hits, err := s.svc.Search(ctx, in.Query, limit)
@@ -142,7 +158,14 @@ func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, i
 	return textResult(b.String()), nil, nil
 }
 
-func (s *Server) handleGetDoc(ctx context.Context, _ *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleGetDoc(ctx context.Context, _ *mcp.CallToolRequest, in getDocInput) (result *mcp.CallToolResult, output any, err error) {
+	ctx, trace := docs.TraceCache(ctx)
+
+	defer func() {
+		if result != nil {
+			result.Meta = mcp.Meta{"cache": trace.Decisions()}
+		}
+	}()
 	// query is section-search within the page: the token-thrift path. heading
 	// (exact named section) takes precedence when both are given.
 	if in.Query != "" && in.Heading == "" {

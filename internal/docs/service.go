@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type Page struct {
 
 // ServiceConfig carries the cache and freshness knobs for a Service.
 type ServiceConfig struct {
+	Logger        *slog.Logger
 	IndexTTL      time.Duration
 	PageTTL       time.Duration
 	CacheMaxBytes int64
@@ -59,9 +61,10 @@ type Service struct {
 	sf       singleflight.Group
 	disk     *DiskCache
 
-	mu    sync.RWMutex
-	idx   *Index
-	idxAt time.Time
+	mu        sync.RWMutex
+	idx       *Index
+	idxAt     time.Time
+	idxSource string
 
 	failMu     sync.Mutex
 	lastFailAt time.Time
@@ -80,6 +83,10 @@ func NewService(fetcher Fetcher, baseURL string, cfg ServiceConfig) *Service {
 		pageTTL:  cfg.PageTTL,
 		disk:     cfg.Disk,
 	}
+	if cfg.Logger != nil {
+		s.pages.logger = cfg.Logger
+	}
+
 	s.loadDisk()
 
 	return s
@@ -113,7 +120,7 @@ func (s *Service) loadDisk() {
 			pageListRaw = e.Value
 		default:
 			if slug, ok := strings.CutPrefix(e.Key, diskPagePrefix); ok {
-				s.pages.putAged(slug, e.Value, s.pageTTL, e.StoredAt)
+				s.pages.putSource(slug, e.Value, s.pageTTL, e.StoredAt, "disk")
 			}
 			// Unprefixed keys (including any legacy layout) are ignored.
 		}
@@ -133,7 +140,7 @@ func (s *Service) loadDisk() {
 	}
 
 	s.mu.Lock()
-	s.idx, s.idxAt = idx, indexAt
+	s.idx, s.idxAt, s.idxSource = idx, indexAt, "disk"
 	s.mu.Unlock()
 }
 
@@ -179,14 +186,21 @@ func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 		return Page{}, fmt.Errorf("slug %q: %w", slug, ErrNotFound)
 	}
 
-	content, state, cached := s.pages.Get(slug)
+	content, state, cached, d := s.pages.lookup(slug)
 	if cached && state == StateFresh {
+		s.record(ctx, d)
 		return Page{Content: content}, nil
 	}
 
 	if cached && s.originCoolingDown() {
+		d.Status = "stale-serve"
+		s.record(ctx, d)
+
 		return Page{Content: content, Stale: true}, nil
 	}
+
+	d.Status = "miss"
+	s.record(ctx, d)
 
 	fetched, err := s.fetchShared(ctx, "page:"+slug, func(dctx context.Context) ([]byte, error) {
 		body, ferr := s.fetcher.Fetch(dctx, doc.URL)
@@ -223,7 +237,10 @@ func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 
 	s.noteOriginFailure()
 
-	if stale, _, ok := s.pages.Get(slug); ok {
+	if stale, _, ok, staleDecision := s.pages.lookup(slug); ok {
+		staleDecision.Status = "stale-serve"
+		s.record(ctx, staleDecision)
+
 		return Page{Content: stale, Stale: true}, nil
 	}
 
@@ -236,16 +253,20 @@ func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 // catalogue is never discarded).
 func (s *Service) index(ctx context.Context) (*Index, error) {
 	s.mu.RLock()
-	idx, at := s.idx, s.idxAt
+	idx, at, source := s.idx, s.idxAt, s.idxSource
 	s.mu.RUnlock()
 
 	if idx != nil && time.Since(at) < s.indexTTL {
+		s.record(ctx, decision("index", "hit", source, at, s.indexTTL))
 		return idx, nil
 	}
 
 	if idx != nil && s.originCoolingDown() {
+		s.record(ctx, decision("index", "stale-serve", source, at, s.indexTTL))
 		return idx, nil
 	}
+
+	s.record(ctx, decision("index", "miss", source, at, s.indexTTL))
 
 	fresh, err := s.refreshIndex(ctx)
 	if err == nil {
@@ -253,6 +274,7 @@ func (s *Service) index(ctx context.Context) (*Index, error) {
 	}
 
 	if idx != nil {
+		s.record(ctx, decision("index", "stale-serve", source, at, s.indexTTL))
 		return idx, nil
 	}
 
@@ -282,7 +304,8 @@ func (s *Service) refreshIndex(ctx context.Context) (*Index, error) {
 		}
 
 		s.mu.Lock()
-		s.idx, s.idxAt = idx, time.Now()
+		s.idx, s.idxAt, s.idxSource = idx, time.Now(), "memory"
+		s.pages.log(decision("index", "write", "memory", s.idxAt, s.indexTTL))
 		s.mu.Unlock()
 
 		s.storeDisk(diskIndexKey, raw)
@@ -321,7 +344,11 @@ func (s *Service) storeDisk(key string, value []byte) {
 		return
 	}
 
-	_ = s.disk.Store(key, value)
+	if err := s.disk.Store(key, value); err != nil {
+		s.pages.logger.Debug("cache decision", "key", key, "status", "write-failed", "source", "disk", "age_ms", 0, "error", err)
+	} else {
+		s.pages.log(decision(key, "write", "disk", time.Now(), 0))
+	}
 }
 
 func (s *Service) originCoolingDown() bool {
