@@ -219,3 +219,13 @@ file = ".mise/tasks/release-prepare-subjects"
 ["release:finalize"]
 description = "Publish the draft after CI has verified signatures and provenance"
 run = 'gh release edit "${TAG_NAME:?}" --repo "${GITHUB_REPOSITORY:?}" --draft=false'
+
+["release:homebrew-checksums"]
+description = "Download published stable release checksums for Homebrew"
+shell = "bash -euo pipefail -c"
+run = '''
+[[ "$(gh release view "${TAG_NAME:?}" --repo "${GITHUB_REPOSITORY:?}" --json isDraft,isPrerelease --jq '.isDraft or .isPrerelease')" == false ]]
+mkdir -p dist
+gh release download "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" \
+  --pattern checksums.txt --dir dist --clobber
+'''

@@ -163,4 +163,22 @@ provenance metadata remain enabled, but do not replace publisher signatures.
 
 Before the first release, enable Actions before pushing the final commit to `main`. The release gate requires successful push-triggered `ci` and `security` runs for the exact tagged commit; enabling Actions after a push does not create those runs. Confirm that the release repository has write access to the GHCR package. Package visibility is separate from repository visibility, and making an existing package public exposes its existing versions as well. Review package contents before changing visibility.
 
+After a public stable release is finalized, the shared `homebrew-publish-formula`
+action updates `Formula/github-docs-mcp.rb` in `matcra587/homebrew-tap` using the
+published archive checksums. Private releases and prereleases skip this step.
+For releases whose tagged workflow includes Homebrew publishing, a workflow rerun
+can retry the tap update without rebuilding or changing the published release.
+The existing `v0.2.0` formula is seeded separately because that tag predates this
+workflow change.
+
+Configure the packaging App's `APP_CLIENT_ID` variable and `APP_PRIVATE_KEY`
+secret in the `deploy` environment. The App must be installed on `homebrew-tap`
+with contents write permission. The workflow requests a short-lived token scoped
+to that tap, matching the Jira release setup. `release:homebrew-checksums` rejects
+drafts and prereleases before downloading checksums.
+
+The formula supports release archives and `brew install --HEAD matcra587/tap/github-docs-mcp`. HEAD builds use Homebrew's Go build arguments;
+version reporting falls back to Go build metadata. Shell completions are omitted
+because this server does not expose a completion command.
+
 </details>
