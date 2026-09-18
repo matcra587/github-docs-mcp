@@ -18,7 +18,7 @@ built-in rate limiting and retry, over stdio or streamable HTTP.
 
 ## Install
 
-Choose a published binary, container or source installation. After installing,
+Choose Homebrew, a published binary, a container or a source installation. After installing,
 [configure your MCP client](#mcp-server). For a development checkout, see
 [CONTRIBUTING.md](CONTRIBUTING.md#local-setup).
 
@@ -46,6 +46,35 @@ github-docs-mcp -version
 Upgrade with `brew upgrade matcra587/tap/github-docs-mcp`. To build the latest
 `main` from source instead, use `brew install --HEAD matcra587/tap/github-docs-mcp`.
 Then use the [native MCP configuration](#mcp-server).
+
+#### Switching an existing installation to Homebrew
+
+An older executable or mise shim earlier on `PATH` can still take precedence.
+Check which executable your shell finds and compare it with Homebrew's copy:
+
+```sh
+type -a github-docs-mcp
+command -v github-docs-mcp
+brew --prefix github-docs-mcp
+"$(brew --prefix github-docs-mcp)/bin/github-docs-mcp" -version
+```
+
+If mise shadows the Homebrew binary, run `mise which github-docs-mcp` and
+`mise ls --installed` to identify its source. For a mise-managed installation,
+remove its entry from the relevant mise configuration and uninstall using the
+exact tool identifier shown by mise; the executable name may not be a registered
+tool name. If only a stale shim remains, run `mise reshim`.
+`aqua:github/github-mcp-server` is a different server, not this project.
+
+For a manually installed or `go install` copy, back up the older executable and
+remove it from `PATH`, or replace it with a symlink to Homebrew's binary if an
+existing MCP configuration uses that absolute path. Check `command -v` and
+`github-docs-mcp -version` again. Hiding Homebrew's shadow warning does not change
+which executable runs.
+
+Update any absolute executable path in your MCP client configuration and restart
+the client. Clients that do not inherit your shell's `PATH` should use an absolute
+path as described below.
 
 ### Prebuilt binary
 
@@ -103,7 +132,7 @@ claude mcp add github-docs -- docker run -i --rm ghcr.io/matcra587/github-docs-m
 }
 ```
 
-**stdio, no container.** For a prebuilt or source-installed binary on your `PATH`:
+**stdio, no container.** For a Homebrew, prebuilt or source-installed binary on your `PATH`:
 
 ```sh
 claude mcp add github-docs -- github-docs-mcp
@@ -118,6 +147,13 @@ claude mcp add github-docs -- github-docs-mcp
   }
 }
 ```
+
+If the client cannot find the executable, set `command` to its absolute path.
+For Homebrew, run `brew --prefix` and append `/bin/github-docs-mcp` to that output
+(typically `/opt/homebrew/bin/github-docs-mcp` on Apple Silicon or
+`/home/linuxbrew/.linuxbrew/bin/github-docs-mcp` on Linux). Paste the resolved
+path into the configuration; JSON does not expand shell commands. Restart the
+MCP client after installing or upgrading the executable.
 
 Native clients automatically reuse `os.UserCacheDir()/github-docs-mcp` across
 sessions (for example, `$XDG_CACHE_HOME/github-docs-mcp` on Linux). No additional

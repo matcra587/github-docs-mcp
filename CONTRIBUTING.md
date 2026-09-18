@@ -29,7 +29,11 @@ mise exec -- go install ./cmd/github-docs-mcp
 
 Ensure `GOBIN` (or `$(go env GOPATH)/bin` when `GOBIN` is unset) is on your `PATH` before configuring
 your MCP client. Restart the client after rebuilding an executable it uses.
-To return to a release build, follow the [installation guide](README.md#install).
+mise manages this checkout's development tools; the build task does not install
+the server globally. Use `./bin/github-docs-mcp` explicitly when testing the
+checkout so a Homebrew or older global binary cannot take precedence.
+To return to a release build, follow the [installation guide](README.md#install)
+and its [Homebrew migration checks](README.md#switching-an-existing-installation-to-homebrew).
 
 ## Checks
 
