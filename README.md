@@ -34,6 +34,19 @@ docker run --rm ghcr.io/matcra587/github-docs-mcp:latest -version
 Use a version tag such as `v0.1.0` instead of `latest` to select a specific
 release. The release page also provides immutable image digest references.
 
+### Homebrew
+
+Supports macOS Apple Silicon and Linux x86-64/ARM64:
+
+```sh
+brew install matcra587/tap/github-docs-mcp
+github-docs-mcp -version
+```
+
+Upgrade with `brew upgrade matcra587/tap/github-docs-mcp`. To build the latest
+`main` from source instead, use `brew install --HEAD matcra587/tap/github-docs-mcp`.
+Then use the [native MCP configuration](#mcp-server).
+
 ### Prebuilt binary
 
 Download an archive for your OS and architecture from

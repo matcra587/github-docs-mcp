@@ -22,7 +22,11 @@ command="$(basename "$0")"
 printf '%s %s\n' "${command}" "$*" >>"${TRACE}"
 [[ "${FAIL_COMMAND:-}" != "${command} ${1:-}" ]] || exit 42
 if [[ "${command} $1" == 'gh release' && "$2" == view ]]; then
-  echo "${DRAFT:-true}"
+  if [[ "$*" == *'isDraft,isPrerelease'* ]]; then
+    [[ "${DRAFT:-true}" == false && "${PRERELEASE:-false}" == false ]] && echo false || echo true
+  else
+    echo "${DRAFT:-true}"
+  fi
 fi
 STUB
 chmod +x "${test_dir}/bin/stub"
@@ -89,3 +93,13 @@ absent 'cosign '
 FAIL_COMMAND='cosign verify-blob' run_case bad-checksum-signature-stops-verification fail release:verify-signatures
 absent 'cosign verify ghcr.io/'
 FAIL_COMMAND='cosign verify' run_case bad-image-signature-fails-verification fail release:verify-signatures
+
+DRAFT=false run_case stable-release-homebrew-checksums pass release:homebrew-checksums
+contains 'gh release view v1.2.3'
+contains 'gh release download v1.2.3 --repo example/repository --pattern checksums.txt --dir dist --clobber'
+DRAFT=true run_case draft-not-published-to-homebrew fail release:homebrew-checksums
+absent 'gh release download'
+DRAFT=false PRERELEASE=true run_case prerelease-not-published-to-homebrew fail release:homebrew-checksums
+absent 'gh release download'
+FAIL_COMMAND='gh release' run_case release-state-failure-stops-homebrew fail release:homebrew-checksums
+absent 'gh release download'
