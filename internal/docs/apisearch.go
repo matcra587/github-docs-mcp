@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The origin's search endpoint indexes the whole corpus server-side, which is
@@ -67,24 +68,29 @@ func (s *Service) pageListURL() string {
 // kept with a synthesised Doc rather than dropped: the search index and the
 // page list are refreshed independently, and a real page must never be
 // invisible just because the catalogue has not caught up.
-func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, limit int) ([]Hit, error) {
-	raw, err := s.fetchShared(ctx, "search:"+query, func(dctx context.Context) ([]byte, error) {
+func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, limit int) (SearchResult, error) {
+	type response struct {
+		body []byte
+		at   time.Time
+	}
+
+	raw, err := fetchShared(ctx, s, "search:"+s.searchURL(query, limit), func(dctx context.Context) (response, error) {
 		body, ferr := s.fetcher.Fetch(dctx, s.searchURL(query, limit))
 		if ferr != nil {
-			return nil, ferr
+			return response{}, ferr
 		}
 
 		s.noteOriginHealthy()
 
-		return body, nil
+		return response{body: body, at: s.now()}, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("search origin: %w", err)
+		return SearchResult{}, fmt.Errorf("search origin: %w", err)
 	}
 
 	var resp searchResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode search response: %w", err)
+	if err := json.Unmarshal(raw.body, &resp); err != nil {
+		return SearchResult{}, fmt.Errorf("decode search response: %w", err)
 	}
 
 	prefix := s.baseURL + "/"
@@ -108,6 +114,7 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 		// scoring them in descending sequence rather than re-ranking locally.
 		hits = append(hits, Hit{
 			Doc:         doc,
+			Source:      pageSource(doc.URL, time.Time{}, false),
 			Score:       len(resp.Hits) - len(hits),
 			Snippet:     apiSnippet(h.Breadcrumbs, h.Highlights.Content, h.Highlights.Title),
 			MatchedBody: true,
@@ -118,7 +125,7 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 		hits = hits[:limit]
 	}
 
-	return hits, nil
+	return SearchResult{Hits: hits, Coverage: Coverage{Sources: []Source{{URL: s.searchURL(query, limit), Language: docsLanguage, Version: docsVersion, FetchedAt: raw.at, Freshness: freshnessFresh}}}}, nil
 }
 
 // apiSnippet renders a one-line snippet from a hit's breadcrumbs and

@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 		//                           worker
 		//
 		// Ignoring either alone leaves the other able to fail the package.
-		goleak.IgnoreAnyFunction("github.com/matcra587/github-docs-mcp/internal/docs.(*Service).fetchShared.func1"),
+		goleak.IgnoreAnyFunction("github.com/matcra587/github-docs-mcp/internal/docs.fetchShared[...].func1"),
 		goleak.IgnoreAnyFunction("github.com/matcra587/github-docs-mcp/internal/docs.(*Service).refreshIndexAsync.func1"),
 	)
 }
@@ -403,7 +403,7 @@ func TestIntegration(t *testing.T) {
 
 		msg := textOf(t, res)
 		is.NotContains(msg, "500", "internal detail leaked to client")
-		is.NotContains(msg, f.srv.URL, "internal detail leaked to client")
+		is.Contains(msg, "Source: "+f.srv.URL+"/llms.txt", "source provenance remains available on errors")
 	})
 
 	t.Run("listed page that 404s reports removed or moved", func(t *testing.T) {

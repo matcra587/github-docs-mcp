@@ -23,6 +23,7 @@ const (
 // replacement or byte-cap pressure does. Stored values are copied on the way
 // in and out, so entries are immutable to callers. Safe for concurrent use.
 type Cache struct {
+	now      func() time.Time
 	logger   *slog.Logger
 	mu       sync.Mutex
 	maxBytes int64
@@ -42,6 +43,7 @@ type cacheEntry struct {
 // NewCache returns a Cache holding at most maxBytes of values.
 func NewCache(maxBytes int64) *Cache {
 	return &Cache{
+		now:      time.Now,
 		logger:   slog.Default(),
 		maxBytes: maxBytes,
 		entries:  make(map[string]*list.Element),
@@ -72,7 +74,7 @@ func (c *Cache) lookup(key string) ([]byte, EntryState, bool, CacheDecision) {
 	e := el.Value.(*cacheEntry) //nolint:forcetypeassert,errcheck // list only ever holds *cacheEntry
 
 	state := StateFresh
-	if time.Since(e.storedAt) >= e.ttl {
+	if c.now().Sub(e.storedAt) >= e.ttl {
 		state = StateStale
 	}
 
@@ -84,7 +86,7 @@ func (c *Cache) lookup(key string) ([]byte, EntryState, bool, CacheDecision) {
 		status = "expired"
 	}
 
-	d := decision("page:"+key, status, e.source, e.storedAt, e.ttl)
+	d := decisionAt("page:"+key, status, e.source, e.storedAt, e.ttl, c.now())
 
 	return out, state, true, d
 }
@@ -93,7 +95,7 @@ func (c *Cache) lookup(key string) ([]byte, EntryState, bool, CacheDecision) {
 // larger than the byte cap are silently not cached; the caller still has the
 // value; caching it is impossible without evicting everything else.
 func (c *Cache) Put(key string, value []byte, ttl time.Duration) {
-	c.putAged(key, value, ttl, time.Now())
+	c.putAged(key, value, ttl, c.now())
 }
 
 // putAged is Put with an explicit storage time, used when rehydrating from

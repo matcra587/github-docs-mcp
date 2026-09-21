@@ -18,6 +18,6 @@ func TestSearchSizeHints(t *testing.T) {
 	require.False(t, page.IsError)
 	warm := callTool(t, c, toolSearchDocs, args)
 	require.False(t, warm.IsError)
-	require.Contains(t, textOf(t, warm), fmt.Sprintf("[cached page bytes: %d]", len(textOf(t, page))))
+	require.Contains(t, textOf(t, warm), fmt.Sprintf("[cached page bytes: %d]", len("# Hooks\n\n## Quickstart\n\nquickstart body\n\n## Reference\n\nreference body\n")))
 	require.NotContains(t, textOf(t, warm), "[page bytes: unknown]")
 }

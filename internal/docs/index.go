@@ -82,9 +82,14 @@ func ParseIndex(baseURL string, r io.Reader) (*Index, error) {
 // descriptions are empty; a curated llms.txt entry for the same slug always
 // wins during the merge.
 //
-// Unlike ParseIndex an empty result is not an error: the page list is a
-// best-effort widening of the catalogue, never its only source.
+// The compatibility parser returns valid entries; service refreshes additionally
+// reject empty, malformed and truncated responses.
 func ParsePageList(baseURL string, r io.Reader) []Doc {
+	docs, _ := parsePageList(baseURL, r, false)
+	return docs
+}
+
+func parsePageList(baseURL string, r io.Reader, strict bool) ([]Doc, error) {
 	prefix := strings.TrimSuffix(baseURL, "/") + "/"
 
 	var (
@@ -97,7 +102,7 @@ func ParsePageList(baseURL string, r io.Reader) []Doc {
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if line == "" || len(line) > 4096 {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
@@ -107,7 +112,11 @@ func ParsePageList(baseURL string, r io.Reader) []Doc {
 			line = "/" + rest
 		}
 
-		if !strings.HasPrefix(line, "/") {
+		if !strings.HasPrefix(line, "/") || len(line) > 4096 {
+			if strict {
+				return nil, fmt.Errorf("malformed pagelist: %w", ErrIndexUnavailable)
+			}
+
 			continue
 		}
 
@@ -124,13 +133,11 @@ func ParsePageList(baseURL string, r io.Reader) []Doc {
 		})
 	}
 
-	if sc.Err() != nil {
-		// A truncated page list still yields a usable widening of the
-		// catalogue; the entries parsed so far are all valid.
-		return docs
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scan pagelist: %w", err)
 	}
 
-	return docs
+	return docs, nil
 }
 
 // MergeIndex returns an Index holding every doc in primary plus each doc in
