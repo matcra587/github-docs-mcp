@@ -190,13 +190,15 @@ codex mcp add github-docs --url http://127.0.0.1:8080/mcp
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_docs` | `section?`, `limit?` (default 50, max 200) | Page slugs, titles and descriptions |
+| `list_docs` | `section?`, `limit?` (default 50, max 200), `cursor?` | Page slugs, titles and descriptions |
 | `search_docs` | `query`, `limit?` (default 10, max 50) | Ranked matches with section paths and text snippets |
-| `get_doc` | `slug`, `heading?`, `query?`, `offset?` | A Markdown page or selected sections |
+| `get_doc` | `slug?`, `heading?`, `query?`, `cursor?`, `offset?` | A Markdown page or selected sections |
 
-Arguments ending in `?` are optional. A slug identifies a page; a full GitHub Docs URL also works.
+Arguments ending in `?` are optional. Initial `get_doc` calls require `slug`; a full GitHub Docs URL also works.
 
-For a specific question, use `get_doc` with `heading` or `query` to read only the relevant sections. Text comes directly from the docs, without summarisation. Long pages arrive in 50KB chunks; use the returned `offset` to continue reading.
+Use `heading` or `query` for focused reading. Content arrives in 50 KiB windows, with up to five matching sections per group.
+
+Follow the returned cursor-only call to continue `get_doc` or `list_docs`. Cursors work across restarts when content is unchanged; changed content returns a restart call. Legacy `offset` calls still work but cannot detect changed content.
 
 Search results show page sizes when a cached copy is available. Sizes may be out of date; unknown sizes stay unknown rather than triggering extra downloads. If GitHub Docs cannot be reached, cached pages are returned with a note that they may be stale.
 
@@ -410,7 +412,7 @@ cached content immediately rather than paying full retry latency per request.
 
 **Bounded everything.** Body size caps per endpoint, an LRU byte cap on the
 memory cache, an outbound token bucket, jittered retry honouring `Retry-After`,
-and a 50KB window on returned pages with a continuation offset.
+and a 50 KiB window on returned pages with snapshot-validated cursors.
 
 **Trust boundary.** The origin is the only external dependency and is treated as
 untrusted input: redirects may not leave the base host or downgrade the scheme,
