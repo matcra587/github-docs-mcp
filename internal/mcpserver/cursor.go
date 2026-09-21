@@ -15,9 +15,7 @@ import (
 )
 
 const (
-	// Version 2 preserves source line endings in heading and query selections.
-	// Version 1 offsets address normalised text and cannot be resumed safely.
-	cursorVersion   = 2
+	cursorVersion   = 3
 	maxCursorBytes  = 16 * 1024
 	pageWindowBytes = 50 * 1024
 )
