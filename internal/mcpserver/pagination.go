@@ -87,6 +87,10 @@ func (s *Server) docPage(ctx context.Context, req *mcp.CallToolRequest, in getDo
 		return errorResult("slug is required for an initial get_doc call; continuations accept only cursor")
 	}
 
+	if err := s.resolveReference(&cursor.Selection); err != nil {
+		return errorResult(err.Error() + "; use a page slug from list_docs")
+	}
+
 	page, err := s.svc.Get(ctx, cursor.Selection.Slug)
 	defer func() { withProvenance(result, page.Source, page.Catalogue) }()
 
@@ -101,7 +105,7 @@ func (s *Server) docPage(ctx context.Context, req *mcp.CallToolRequest, in getDo
 
 	cursor.Snapshot = fingerprint
 
-	selected, err := selectContent(page.Content, &cursor)
+	selected, err := s.selectPageContent(ctx, page, &cursor)
 	if err != nil {
 		return s.selectionError(ctx, page, cursor, err)
 	}
@@ -118,10 +122,35 @@ func (s *Server) docPage(ctx context.Context, req *mcp.CallToolRequest, in getDo
 	return renderContinuation(page.Stale, selected.summary, window, cursor, selected.nextGroup, !resuming && in.Offset > 0)
 }
 
+func (s *Server) resolveReference(selected *selection) error {
+	reference, err := s.svc.ParseReference(selected.Slug)
+	if err != nil {
+		return err
+	}
+
+	selected.Slug = reference.Path
+	if selected.Heading == "" && selected.Query == "" && reference.Fragment != "" {
+		selected.Heading = "#" + reference.Fragment
+	}
+
+	return nil
+}
+
 type selectedContent struct {
 	content   []byte
 	summary   string
 	nextGroup int
+}
+
+func (s *Server) selectPageContent(ctx context.Context, page docs.Page, cursor *continuation) (selectedContent, error) {
+	resolved, err := s.svc.ResolveHeading(ctx, page, cursor.Selection.Heading)
+	if err != nil {
+		return selectedContent{}, err
+	}
+
+	cursor.Selection.Heading = resolved
+
+	return selectContent(page.Content, cursor)
 }
 
 func selectContent(body []byte, cursor *continuation) (selectedContent, error) {

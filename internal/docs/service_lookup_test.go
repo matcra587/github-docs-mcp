@@ -25,6 +25,17 @@ func TestLookupExactDuplicateAnchor(t *testing.T) {
 	assert.Equal(t, "## Setup\nsecond\n", string(section))
 }
 
+func TestLookupSearchCatalogueDisagreement(t *testing.T) {
+	t.Parallel()
+	origin := newFixtureOrigin(t)
+	service := newTestService(t, origin)
+	result, err := service.searchOrigin(t.Context(), newIndex(nil), "zebra", 2)
+	require.NoError(t, err)
+	require.Len(t, result.Hits, 1)
+	require.Contains(t, result.Hits[0].Snippet, "unavailable in the current catalogue", "uncatalogued hits must explain why get_doc cannot retrieve them")
+	assert.Zero(t, origin.hitCount("/en/gamma.md"), "search must not download pages to validate hits")
+}
+
 func TestLookupInlineLinkAnchor(t *testing.T) {
 	t.Parallel()
 

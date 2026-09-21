@@ -198,9 +198,9 @@ Arguments ending in `?` are optional. Initial `get_doc` calls require `slug`; a 
 
 Languages: `en` (default), `es`, `ja`, `pt` (Brazilian Portuguese), `zh` (Simplified Chinese), `ru`, `fr`, `ko`, `de`. Set `language` for search and listing; `get_doc` follows the slug or URL's language. Section filters must match the selected language. Missing translations return an error with an English alternative when known.
 
-Use `heading` or `query` for focused reading. Content arrives in 50 KiB windows, with up to five matching sections per group.
+Use `heading`, `query`, or a page URL's `#anchor` for focused reading, in that precedence order. Missing heading anchors return an error with actual headings; an empty fragment means the whole page. Content arrives in 50 KiB windows, with up to five matching sections per group.
 
-Full URLs must match the configured origin and base path. Foreign authorities, query strings, protocol-relative URLs and enterprise/version paths are rejected rather than reinterpreted as current GitHub.com docs.
+Full URLs must match the configured origin and base path. Foreign authorities, query strings, protocol-relative URLs and enterprise/version paths are rejected rather than reinterpreted as current GitHub.com docs. Search breadcrumbs provide context, not executable heading names; hits absent from the catalogue carry an availability notice.
 
 Follow the returned cursor-only call to continue `get_doc` or `list_docs`. Cursors work across restarts when content is unchanged; changed content returns a restart call. Legacy `offset` calls still work but cannot detect changed content. Cursors from earlier releases must be restarted.
 

@@ -98,24 +98,36 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 	seen := make(map[string]bool, len(resp.Hits))
 
 	for _, h := range resp.Hits {
-		slug := cleanSlug(strings.TrimPrefix(h.URL, "/"))
-		if language := languagePath("/"+slug, ""); language != "" && language != s.Language() {
+		reference, err := s.ParseReference(h.URL)
+		if err != nil {
+			return SearchResult{}, fmt.Errorf("invalid search result reference: %w", err)
+		}
+
+		slug := reference.Path
+		if language := languagePath("/"+slug, ""); language != s.Language() {
 			return SearchResult{}, fmt.Errorf("search response leaves requested language %q", s.Language())
 		}
 
-		if !strings.HasPrefix(slug, s.Language()+"/") || seen[slug] {
+		if seen[slug] {
 			continue
 		}
 
 		seen[slug] = true
 
 		doc, ok := idx.BySlug(slug)
+
+		snippet := apiSnippet(h.Breadcrumbs, h.Highlights.Content, h.Highlights.Title)
 		if !ok {
 			doc = Doc{Slug: slug, Title: h.Title, URL: markdownURL(prefix, slug)}
+			snippet += " [unavailable in the current catalogue; get_doc requires catalogue membership; retry after catalogue refresh or use list_docs]"
 		}
 
 		if doc.Title == "" {
 			doc.Title = h.Title
+		}
+
+		if reference.Fragment != "" {
+			snippet += fmt.Sprintf(" [section: get_doc({\"slug\":%q})]", reference.String())
 		}
 
 		// The endpoint returns hits already ranked; preserve that order by
@@ -124,7 +136,7 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 			Doc:         doc,
 			Source:      pageSource(doc, time.Time{}, false),
 			Score:       len(resp.Hits) - len(hits),
-			Snippet:     apiSnippet(h.Breadcrumbs, h.Highlights.Content, h.Highlights.Title),
+			Snippet:     snippet,
 			MatchedBody: true,
 		})
 	}
