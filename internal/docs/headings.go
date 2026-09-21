@@ -3,10 +3,15 @@ package docs
 import (
 	"bytes"
 	"html"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
+
+var headingAutolink = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20\x7f<>]*|` +
+	"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?" +
+	`(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)$`)
 
 type headingRange struct {
 	level int
@@ -124,6 +129,11 @@ func headingPlain(text string) string {
 
 		if character == '<' {
 			if end := strings.IndexByte(text[position:], '>'); end >= 0 {
+				label := text[position+1 : position+end]
+				if headingAutolink.MatchString(label) {
+					out.WriteString(label)
+				}
+
 				position += end + 1
 				continue
 			}
