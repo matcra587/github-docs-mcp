@@ -182,7 +182,12 @@ func normalizeSlug(slug string) string {
 // copy is served with Stale set; during the post-failure cool-down the stale
 // copy is served without re-attempting the fetch at all.
 func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
-	slug = normalizeSlug(slug)
+	reference, err := s.ParseReference(slug)
+	if err != nil {
+		return Page{}, err
+	}
+
+	slug = reference.Path
 
 	view, err := s.forSlug(slug)
 	if err != nil {
