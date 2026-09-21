@@ -202,11 +202,11 @@ Search results show page sizes when a cached copy is available. Sizes may be out
 
 ### Where results come from
 
-Tool responses include canonical source URLs, known language/product/version scope, recorded fetch times and freshness. Fresh means within the local cache TTL; it does not establish when GitHub last revised a page. The MCP server version is never a documentation revision. Unfetched pages and upstream search snippets have unknown page freshness.
+Responses show source URLs, scope, fetch time and cache freshness. “Fresh” means within the cache TTL, not recently revised upstream. The server version is not a documentation revision; unfetched page freshness is unknown.
 
-Catalogue sources refresh independently. If either `llms.txt` or pagelist fails, its last valid copy remains available while the other source can update. Empty, malformed or truncated pagelists do not replace a valid copy. One usable source provides explicitly degraded coverage; no usable sources produces an error. Coverage and source details remain visible for empty results and lookup errors.
+Catalogue sources refresh independently, keeping their last valid copies after failures. Missing or stale sources are flagged, including in empty results and errors.
 
-Search identifies whether it used the upstream index or the fallback over catalogue metadata and cached bodies. Fallback reports reduced coverage and stale cached dependencies. Search is bounded ranked retrieval, not an exhaustive enumeration of matching pages.
+Search labels upstream results or fallback over catalogue metadata and cached pages. Results are ranked and bounded, not exhaustive; fallback has reduced coverage.
 
 <details>
 <summary>GitHub Docs endpoints and offline search</summary>
@@ -401,7 +401,7 @@ not. Entries past their TTL are kept, not evicted, and served with a note when
 the origin cannot be reached. The default disk cache carries that across
 restarts, so a process starting during an outage still has something to serve.
 
-Fetch timestamps survive memory hits and disk reloads. The existing disk format stores timestamps in file modification times; entries written by earlier versions record cache-write time instead of fetch time.
+Fetch times survive cache hits and restarts. Older disk entries record cache-write time instead.
 
 **One fetch per miss.** Concurrent callers for the same page share a single
 request through singleflight, on a detached context, so one caller cancelling
