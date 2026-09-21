@@ -90,6 +90,10 @@ func ParsePageList(baseURL string, r io.Reader) []Doc {
 }
 
 func parsePageList(baseURL string, r io.Reader, strict bool) ([]Doc, error) {
+	return parseLanguagePageList(baseURL, r, strict, docsLanguage)
+}
+
+func parseLanguagePageList(baseURL string, r io.Reader, strict bool, language string) ([]Doc, error) {
 	prefix := strings.TrimSuffix(baseURL, "/") + "/"
 
 	var (
@@ -121,14 +125,20 @@ func parsePageList(baseURL string, r io.Reader, strict bool) ([]Doc, error) {
 		}
 
 		slug := cleanSlug(strings.TrimPrefix(line, "/"))
-		if !isArticleSlug(slug) || seen[slug] {
+		if !strings.HasPrefix(slug, language+"/") || seen[slug] {
 			continue
 		}
 
 		seen[slug] = true
+
+		title := ""
+		if language == docsLanguage {
+			title = titleFromSlug(slug)
+		}
+
 		docs = append(docs, Doc{
 			Slug:  slug,
-			Title: titleFromSlug(slug),
+			Title: title,
 			URL:   markdownURL(prefix, slug),
 		})
 	}

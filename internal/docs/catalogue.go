@@ -20,7 +20,7 @@ func (s *Service) parseComponent(key string, raw []byte) (*Index, error) {
 		return ParseIndex(s.baseURL, bytes.NewReader(raw))
 	}
 
-	entries, err := parsePageList(s.baseURL, bytes.NewReader(raw), true)
+	entries, err := parseLanguagePageList(s.baseURL, bytes.NewReader(raw), true, s.Language())
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (s *Service) parseComponent(key string, raw []byte) (*Index, error) {
 }
 
 func (s *Service) componentSource(c catalogueComponent, url string) Source {
-	source := Source{URL: url, Language: docsLanguage, Version: docsVersion, FetchedAt: c.at.UTC(), Freshness: "unavailable"}
+	source := Source{URL: url, Language: s.Language(), Version: docsVersion, FetchedAt: c.at.UTC(), Freshness: "unavailable"}
 	if c.index != nil {
 		source.Freshness = freshnessFresh
 		if s.now().Sub(c.at) >= s.indexTTL || !c.failedAt.IsZero() {
@@ -56,7 +56,11 @@ func (s *Service) catalogueSnapshot() *Index {
 
 	idx := MergeIndex(curated.index, extra)
 
-	idx.Coverage.Sources = []Source{s.componentSource(curated, s.baseURL+"/llms.txt"), s.componentSource(listed, s.pageListURL())}
+	if s.Language() == docsLanguage {
+		idx.Coverage.Sources = append(idx.Coverage.Sources, s.componentSource(curated, s.baseURL+"/llms.txt"))
+	}
+
+	idx.Coverage.Sources = append(idx.Coverage.Sources, s.componentSource(listed, s.pageListURL()))
 	for _, source := range idx.Coverage.Sources {
 		if source.Freshness != freshnessFresh {
 			idx.Coverage.Degraded = true
@@ -79,7 +83,7 @@ func (s *Service) index(ctx context.Context) (*Index, error) {
 
 	var err error
 
-	if s.componentDue(curated) || s.componentDue(listed) {
+	if (s.Language() == docsLanguage && s.componentDue(curated)) || s.componentDue(listed) {
 		status = "miss"
 		_, err = s.refreshIndex(ctx, false)
 	}
@@ -96,7 +100,7 @@ func (s *Service) index(ctx context.Context) (*Index, error) {
 		at, source = listed.at, listed.cacheSource
 	}
 
-	s.record(ctx, decisionAt("index", status, source, at, s.indexTTL, s.now()))
+	s.record(ctx, decisionAt(s.catalogueKey("index"), status, source, at, s.indexTTL, s.now()))
 
 	if err != nil {
 		return idx, err
@@ -126,7 +130,10 @@ func (s *Service) refreshIndex(ctx context.Context, force bool) (*Index, error) 
 	for {
 		result, err := fetchShared(ctx, s, "index", func(dctx context.Context) (refresh, error) {
 			var workers sync.WaitGroup
-			workers.Go(func() { s.refreshComponent(dctx, diskIndexKey, s.baseURL+"/llms.txt", force) })
+			if s.Language() == docsLanguage {
+				workers.Go(func() { s.refreshComponent(dctx, diskIndexKey, s.baseURL+"/llms.txt", force) })
+			}
+
 			workers.Go(func() { s.refreshComponent(dctx, diskPageListKey, s.pageListURL(), force) })
 			workers.Wait()
 
@@ -175,8 +182,8 @@ func (s *Service) refreshComponent(ctx context.Context, key, url string, force b
 		s.pages.logger.Debug("catalogue refresh failed", "key", key, "error", err)
 	} else {
 		component = catalogueComponent{index: idx, at: at, cacheSource: "memory"}
-		s.storeDisk(key, raw, at)
-		s.pages.log(decisionAt(key, "write", "memory", at, s.indexTTL, at))
+		s.storeDisk(s.catalogueKey(key), raw, at)
+		s.pages.log(decisionAt(s.catalogueKey(key), "write", "memory", at, s.indexTTL, at))
 	}
 
 	s.mu.Lock()

@@ -190,11 +190,13 @@ codex mcp add github-docs --url http://127.0.0.1:8080/mcp
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_docs` | `section?`, `limit?` (default 50, max 200), `cursor?` | Page slugs, titles and descriptions |
-| `search_docs` | `query`, `limit?` (default 10, max 50) | Ranked matches with section paths and text snippets |
+| `list_docs` | `language?`, `section?`, `limit?` (default 50, max 200), `cursor?` | Page slugs and available metadata |
+| `search_docs` | `query`, `language?`, `limit?` (default 10, max 50) | Ranked matches with section paths and text snippets |
 | `get_doc` | `slug?`, `heading?`, `query?`, `cursor?`, `offset?` | A Markdown page or selected sections |
 
 Arguments ending in `?` are optional. Initial `get_doc` calls require `slug`; a full GitHub Docs URL also works.
+
+Languages: `en` (default), `es`, `ja`, `pt` (Brazilian Portuguese), `zh` (Simplified Chinese), `ru`, `fr`, `ko`, `de`. Set `language` for search and listing; `get_doc` follows the slug or URL's language. Section filters must match the selected language. Missing translations return an error with an English alternative when known.
 
 Use `heading` or `query` for focused reading. Content arrives in 50 KiB windows, with up to five matching sections per group.
 
@@ -207,6 +209,8 @@ Search results show page sizes when a cached copy is available. Sizes may be out
 Responses show source URLs, scope, fetch time and cache freshness. “Fresh” means within the cache TTL, not recently revised upstream. The server version is not a documentation revision; unfetched page freshness is unknown.
 
 Catalogue sources refresh independently, keeping their last valid copies after failures. Missing or stale sources are flagged, including in empty results and errors.
+
+Each language uses its own catalogue. Non-English listings contain slugs; localized titles come from search results. English `llms.txt` metadata is not reused as translated text.
 
 Search labels upstream results or fallback over catalogue metadata and cached pages. Results are ranked and bounded, not exhaustive; fallback has reduced coverage.
 

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Hit is one search result. MatchedBody marks hits found in cached page
@@ -158,6 +159,15 @@ func Suggest(idx *Index, miss string, n int) []string {
 // hints on ErrNotFound. Errors resolving the index yield no suggestions,
 // the caller is already on an error path.
 func (s *Service) SuggestSlugs(ctx context.Context, miss string, n int) []string {
+	view, err := s.forSlug(miss)
+	if err != nil {
+		return nil
+	}
+
+	if view != s {
+		return view.SuggestSlugs(ctx, miss, n)
+	}
+
 	idx, err := s.index(ctx)
 	if err != nil {
 		return nil
@@ -293,7 +303,7 @@ func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tok
 
 		decisions[d.Slug] = cacheDecision
 
-		hits = append(hits, Hit{Doc: d, Source: pageSource(d.URL, cacheDecision.fetchedAt, state == StateStale), Score: bodyWeight * len(tokens), MatchedBody: true})
+		hits = append(hits, Hit{Doc: d, Source: pageSource(d, cacheDecision.fetchedAt, state == StateStale), Score: bodyWeight * len(tokens), MatchedBody: true})
 	}
 
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -350,15 +360,19 @@ func bodySnippet(body []byte, query string, tokens []string) string {
 // snippetAround extracts a short window of original text around the first
 // occurrence of tok in lower (the lowercased original).
 func snippetAround(lower, original, tok string) string {
-	i := strings.Index(lower, tok)
-	if i < 0 {
+	before, _, ok := strings.Cut(lower, tok)
+	if !ok {
 		return ""
 	}
 
-	start := max(i-60, 0)
-	end := min(i+len(tok)+60, len(original))
+	// Case folding can change UTF-8 widths (for example İ becomes i).
+	// Map the folded byte position back to rune positions in the original.
+	startRune := utf8.RuneCountInString(before)
+	runes := []rune(original)
+	start := max(startRune-60, 0)
+	end := min(startRune+utf8.RuneCountInString(tok)+60, len(runes))
 
-	return strings.TrimSpace(original[start:end])
+	return strings.TrimSpace(string(runes[start:end]))
 }
 
 // editDistance is plain Levenshtein distance over bytes.

@@ -38,12 +38,18 @@ func FuzzExtractHeading(f *testing.F) {
 
 	f.Add([]byte("# A\n\nbody\n"), "A")
 	f.Add([]byte("### deep\n#\n######## overlong\n"), "deep")
+	f.Add([]byte("# ガイド\r\n\r\n## 環境の設定\r\n\r\n本文"), "#環境の設定")
+	f.Add([]byte("## Guía rápida\n\nTexto original."), "Guía rápida")
 	f.Add([]byte(""), "")
 
 	f.Fuzz(func(t *testing.T, data []byte, heading string) {
 		out, err := ExtractHeading(data, heading)
 		if err == nil && len(out) == 0 {
 			t.Fatal("successful extraction must return content")
+		}
+
+		if err == nil && !bytes.Contains(data, out) {
+			t.Fatal("successful extraction must preserve the original source bytes")
 		}
 
 		_ = Paginate(out, 0)

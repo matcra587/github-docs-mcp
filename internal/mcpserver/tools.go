@@ -34,14 +34,16 @@ const (
 // rejects a call that omits it before the handler runs.
 type (
 	listDocsInput struct {
-		Cursor  string `json:"cursor,omitempty" jsonschema:"Opaque continuation from a previous list_docs result; pass cursor only"`
-		Section string `json:"section,omitempty" jsonschema:"Optional slug prefix filter, e.g. \"en/actions\""`
-		Limit   int    `json:"limit,omitempty"   jsonschema:"Maximum entries returned (default 50, max 200)"`
+		Language string `json:"language,omitempty" jsonschema:"Documentation language: en (default), es, ja, pt, zh, ru, fr, ko, de. Must match any section prefix."`
+		Cursor   string `json:"cursor,omitempty" jsonschema:"Opaque continuation from a previous list_docs result; pass cursor only"`
+		Section  string `json:"section,omitempty" jsonschema:"Optional slug prefix filter, e.g. \"en/actions\""`
+		Limit    int    `json:"limit,omitempty"   jsonschema:"Maximum entries returned (default 50, max 200)"`
 	}
 
 	searchDocsInput struct {
-		Query string `json:"query"           jsonschema:"Keywords to search for, e.g. \"cache action dependencies\""`
-		Limit int    `json:"limit,omitempty" jsonschema:"Maximum results returned (default 10, max 50)"`
+		Language string `json:"language,omitempty" jsonschema:"Documentation language: en (default), es, ja, pt, zh, ru, fr, ko, de. Queries are passed through without translation."`
+		Query    string `json:"query"           jsonschema:"Keywords to search for, e.g. \"cache action dependencies\""`
+		Limit    int    `json:"limit,omitempty" jsonschema:"Maximum results returned (default 10, max 50)"`
 	}
 
 	getDocInput struct {
@@ -70,7 +72,7 @@ func readOnly(title string) *mcp.ToolAnnotations {
 func (s *Server) registerTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolListDocs,
-		Description: "List the GitHub documentation catalogue: slug, title and one-line description per page. Returns metadata only. Follow cursor-only continuations for all entries.",
+		Description: "List the GitHub documentation catalogue in the selected language (default en): slugs and available metadata. Non-English listings contain slugs without English title substitutions. Follow cursor-only continuations for all entries.",
 		Annotations: readOnly("List documentation pages"),
 	}, s.handleListDocs)
 
@@ -121,7 +123,12 @@ func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	limit := clampLimit(in.Limit, searchLimitDefault, searchLimitMax)
 
-	search, err := s.svc.SearchWithSources(ctx, in.Query, limit)
+	view, err := s.svc.ForLanguage(in.Language)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	search, err := view.SearchWithSources(ctx, in.Query, limit)
 
 	defer func() {
 		if result != nil {
@@ -172,6 +179,21 @@ func (s *Server) handleGetDoc(ctx context.Context, req *mcp.CallToolRequest, in 
 
 // getDocError translates a Service.Get failure into the right client copy.
 func (s *Server) getDocError(ctx context.Context, slug string, err error) *mcp.CallToolResult {
+	if errors.Is(err, docs.ErrUnsupportedLanguage) {
+		return errorResult(err.Error())
+	}
+
+	if errors.Is(err, docs.ErrNotFound) {
+		if language := docs.SlugLanguage(slug); language != "en" {
+			message := fmt.Sprintf("doc %q is unavailable in the requested language (%s).", slug, language)
+			if alternative := s.svc.EnglishAlternative(ctx, slug); alternative != "" {
+				message += fmt.Sprintf(" English alternative: get_doc({\"slug\":%q}).", alternative)
+			}
+
+			return errorResult(message)
+		}
+	}
+
 	var fe *docs.FetchError
 	if errors.As(err, &fe) && fe.StatusCode == http.StatusNotFound {
 		// In the index but gone upstream: a different situation from a bad

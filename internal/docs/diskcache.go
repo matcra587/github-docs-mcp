@@ -275,5 +275,6 @@ func (d *DiskCache) prune() {
 }
 
 func isCatalogueKey(key string) bool {
-	return key == diskIndexKey || key == diskPageListKey
+	_, _, ok := catalogueKeyLanguage(key)
+	return ok
 }

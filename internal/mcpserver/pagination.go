@@ -12,14 +12,19 @@ import (
 )
 
 func (s *Server) listPage(ctx context.Context, req *mcp.CallToolRequest, in listDocsInput) (result *mcp.CallToolResult) {
-	cursor := continuation{Version: cursorVersion, Tool: toolListDocs, Origin: s.svc.Origin(), Selection: selection{Section: in.Section}, Limit: clampLimit(in.Limit, listLimitDefault, listLimitMax)}
+	cursor := continuation{Version: cursorVersion, Tool: toolListDocs, Origin: s.svc.Origin(), Selection: selection{Section: in.Section, Language: in.Language}, Limit: clampLimit(in.Limit, listLimitDefault, listLimitMax)}
 
 	cursor, resuming, err := resolveCursor(req, in.Cursor, cursor)
 	if err != nil {
 		return errorResult(err.Error())
 	}
 
-	catalogue, err := s.svc.Catalogue(ctx, cursor.Selection.Section, 0)
+	view, err := s.listView(cursor.Selection)
+	if err != nil {
+		return errorResult(err.Error())
+	}
+
+	catalogue, err := view.Catalogue(ctx, cursor.Selection.Section, 0)
 	defer func() { withProvenance(result, docs.Source{}, catalogue.Coverage) }()
 
 	if err != nil {
@@ -53,7 +58,7 @@ func (s *Server) listPage(ctx context.Context, req *mcp.CallToolRequest, in list
 	}
 
 	for _, doc := range catalogue.Docs[cursor.Position:end] {
-		fmt.Fprintf(&b, "%s - %s: %s\n  %s", doc.Slug, doc.Title, doc.Description, sourceText(doc.Source()))
+		writeCatalogueEntry(&b, doc)
 	}
 
 	if end < total {
@@ -224,4 +229,27 @@ func renderContinuation(stale bool, summary string, window docs.Window, cursor c
 	}
 
 	return textResult(b.String())
+}
+
+func (s *Server) listView(selected selection) (*docs.Service, error) {
+	view, err := s.svc.ForLanguage(selected.Language)
+	if err != nil {
+		return nil, err
+	}
+
+	if selected.Section != "" && selected.Section != view.Language() && !strings.HasPrefix(selected.Section, view.Language()+"/") {
+		return nil, fmt.Errorf("section must start with the selected language (%s); pass a matching language and section", view.Language())
+	}
+
+	return view, nil
+}
+
+func writeCatalogueEntry(b *strings.Builder, doc docs.Doc) {
+	b.WriteString(doc.Slug)
+
+	if doc.Title != "" {
+		fmt.Fprintf(b, " - %s: %s", doc.Title, doc.Description)
+	}
+
+	fmt.Fprintf(b, "\n  %s", sourceText(doc.Source()))
 }

@@ -120,6 +120,11 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 				return fmt.Errorf("redirect changes scheme to %q", req.URL.Scheme)
 			}
 
+			from := requestLanguage(via[0].URL, u.Path)
+			if from != "" && requestLanguage(req.URL, u.Path) != from {
+				return fmt.Errorf("redirect leaves requested language %q: %w", from, ErrNotFound)
+			}
+
 			return nil
 		},
 		Jar: nil, // never store or replay origin cookies
@@ -216,6 +221,10 @@ func (c *Client) doOnce(ctx context.Context, rawURL string) ([]byte, time.Durati
 		return nil, parseRetryAfter(resp.Header.Get("Retry-After")), &FetchError{URL: rawURL, StatusCode: resp.StatusCode}
 	}
 
+	if language := requestLanguage(req.URL, c.base.Path); language != "" && !contentLanguageMatches(resp.Header.Get("Content-Language"), language) {
+		return nil, 0, &FetchError{URL: rawURL, Err: fmt.Errorf("response language differs from requested %q: %w", language, ErrNotFound)}
+	}
+
 	// No endpoint this server reads serves HTML: pages come back as markdown,
 	// the catalogue as plain text, search as JSON. HTML on a 200 means the
 	// origin rendered a page (or an error) instead of returning source, and
@@ -255,7 +264,7 @@ func isRetryable(err error) bool {
 	// An HTML body on a 200 is a deterministic origin behaviour, not a blip;
 	// retrying only triples the load on an origin that will answer the same
 	// way each time.
-	if errors.Is(fe.Err, errUnexpectedHTML) {
+	if errors.Is(fe.Err, errUnexpectedHTML) || errors.Is(fe.Err, ErrNotFound) {
 		return false
 	}
 

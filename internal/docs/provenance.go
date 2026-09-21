@@ -41,9 +41,9 @@ type SearchResult struct {
 	Coverage Coverage
 }
 
-func pageSource(url string, at time.Time, stale bool) Source {
+func pageSource(doc Doc, at time.Time, stale bool) Source {
 	source := Source{
-		URL: strings.TrimSuffix(url, ".md"), Language: docsLanguage,
+		URL: strings.TrimSuffix(doc.URL, ".md"), Language: docsLanguage,
 		Version: docsVersion, FetchedAt: at.UTC(), Freshness: "unknown",
 	}
 	if !at.IsZero() {
@@ -53,7 +53,9 @@ func pageSource(url string, at time.Time, stale bool) Source {
 		}
 	}
 
-	if _, path, ok := strings.Cut(source.URL, "/en/"); ok {
+	if language, path, ok := strings.Cut(doc.Slug, "/"); ok {
+		source.Language = language
+
 		parts := strings.Split(path, "/")
 		if strings.Contains(parts[0], "@") {
 			source.Version = parts[0]
@@ -69,8 +71,8 @@ func pageSource(url string, at time.Time, stale bool) Source {
 }
 
 func (s *Service) page(doc Doc, body []byte, at time.Time, stale bool, coverage Coverage) Page {
-	return Page{Content: body, Stale: stale, Source: pageSource(doc.URL, at, stale), Catalogue: coverage}
+	return Page{Content: body, Stale: stale, Source: pageSource(doc, at, stale), Catalogue: coverage}
 }
 
 // Source returns the page identity with unknown freshness until fetched.
-func (d Doc) Source() Source { return pageSource(d.URL, time.Time{}, false) }
+func (d Doc) Source() Source { return pageSource(d, time.Time{}, false) }
