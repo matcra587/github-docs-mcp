@@ -135,6 +135,7 @@ func headingPlain(text string) string {
 				}
 
 				position += end + 1
+
 				continue
 			}
 		}
