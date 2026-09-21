@@ -135,13 +135,25 @@ func TestDiskCacheProcessHelper(t *testing.T) {
 	_, err = io.Copy(io.Discard, os.Stdin)
 	require.NoError(t, err)
 
+	// Busy writers can legitimately exceed the cache's one-second lock budget.
+	// Retry only that timeout within the parent's overall process deadline.
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+
 	for i := range 30 {
 		for _, key := range []string{diskIndexKey, diskPageListKey, fmt.Sprintf("page-%s-%d", writer, i)} {
-			require.NoError(t, d.Store(key, payload))
+			require.NoError(t, retryDiskOperation(ctx, func() error { return d.Store(key, payload) }))
 		}
 
-		entries, err := d.Load()
-		require.NoError(t, err)
+		var entries []DiskEntry
+
+		require.NoError(t, retryDiskOperation(ctx, func() error {
+			var err error
+
+			entries, err = d.Load()
+
+			return err
+		}))
 		require.LessOrEqual(t, len(entries), 4)
 
 		for _, entry := range entries {
@@ -150,8 +162,16 @@ func TestDiskCacheProcessHelper(t *testing.T) {
 			require.Equal(t, bytes.Repeat(entry.Value[:1], 4096), entry.Value)
 		}
 		// Inspect physical files too: Load's own budget could hide excess storage.
-		lock, err := d.lock()
-		require.NoError(t, err)
+		var lock *os.File
+
+		require.NoError(t, retryDiskOperation(ctx, func() error {
+			var err error
+
+			lock, err = d.lock()
+
+			return err
+		}))
+
 		files, err := os.ReadDir(dir)
 		require.NoError(t, err)
 
