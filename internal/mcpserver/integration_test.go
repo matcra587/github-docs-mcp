@@ -236,8 +236,8 @@ func TestIntegration(t *testing.T) {
 
 		c, _ := newSession(t, newFixture(t))
 
-		// query/slug carry no omitempty, so the SDK rejects the call before
-		// the handler runs, so no hand-written argument checks needed.
+		// The schema requires query; get_doc conditionally requires slug
+		// in its handler because cursor-only continuations are also valid.
 		for _, tc := range []struct{ tool, missing string }{
 			{"search_docs", "query"},
 			{"get_doc", "slug"},
@@ -266,7 +266,7 @@ func TestIntegration(t *testing.T) {
 		want := map[string][]any{
 			"list_docs":   nil,
 			"search_docs": {"query"},
-			"get_doc":     {"slug"},
+			"get_doc":     nil,
 		}
 
 		for _, tool := range res.Tools {

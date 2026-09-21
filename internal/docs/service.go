@@ -313,3 +313,6 @@ func fetchShared[T any](ctx context.Context, s *Service, key string, work func(c
 		return res.Val.(T), nil //nolint:forcetypeassert,errcheck // Each key has one concrete result type.
 	}
 }
+
+// Origin returns the configured documentation origin used to scope cursors.
+func (s *Service) Origin() string { return s.baseURL }
