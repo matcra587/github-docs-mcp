@@ -234,6 +234,18 @@ The page list combines the first two endpoints. Curated pages keep their titles 
 
 </details>
 
+### Live checks
+
+The [stdio MCP canary](internal/mcpserver/languages_live_test.go) passed these sampled checks on 2026-09-21:
+
+| Check | Coverage |
+| --- | --- |
+| Languages | All 9 listed above |
+| Search then fetch | 2 hits per language, 18 total; bodies matched upstream Markdown |
+| Workflow syntax pages | 206,349–341,219 bytes, fully read across 5–7 windows |
+
+Localized anchors, missing targets, cursor replay and disk restarts also passed. These samples do not cover every article. See [Contributing](CONTRIBUTING.md#checks) to rerun the live checks.
+
 ## Configuration
 
 Flags override environment variables.
