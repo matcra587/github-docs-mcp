@@ -74,13 +74,13 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolSearchDocs,
-		Description: "Full-text search across all GitHub docs by keyword: titles, descriptions and the complete body of every page. Returns ranked slugs with a matching-section breadcrumb; follow up with get_doc(slug, heading=...) or get_doc(slug, query=...).",
+		Description: "Bounded ranked search using GitHub’s upstream index, with reduced coverage over catalogue metadata and cached bodies during outages. Returns ranked slugs with a matching-section breadcrumb; follow up with get_doc(slug, heading=...) or get_doc(slug, query=...).",
 		Annotations: readOnly("Search documentation"),
 	}, s.handleSearchDocs)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolGetDoc,
-		Description: "Fetch one GitHub documentation page as markdown. Accepts a slug (\"en/actions\"), a full docs URL, or a #anchor. Returns page content only. Use query= for the cheapest focused lookup, heading= for a named section.",
+		Description: "Fetch one GitHub documentation page as markdown. Accepts a slug (\"en/actions\"), a full docs URL, or a #anchor. Returns page content and source freshness. Use query= for the cheapest focused lookup, heading= for a named section.",
 		Annotations: readOnly("Get documentation page"),
 	}, s.handleGetDoc)
 }
@@ -107,7 +107,16 @@ func (s *Server) handleListDocs(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 	limit := clampLimit(in.Limit, listLimitDefault, listLimitMax)
 
-	entries, err := s.svc.List(ctx, in.Section, limit)
+	catalogue, err := s.svc.Catalogue(ctx, in.Section, limit)
+
+	defer func() {
+		if result != nil {
+			withProvenance(result, docs.Source{}, catalogue.Coverage)
+		}
+	}()
+
+	entries := catalogue.Docs
+
 	if err != nil {
 		return s.toolError(ctx, toolListDocs, err, "section", in.Section), nil, nil
 	}
@@ -118,7 +127,7 @@ func (s *Server) handleListDocs(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 	var b strings.Builder
 	for _, d := range entries {
-		fmt.Fprintf(&b, "%s - %s: %s\n", d.Slug, d.Title, d.Description)
+		fmt.Fprintf(&b, "%s - %s: %s\n  %s", d.Slug, d.Title, d.Description, sourceText(d.Source()))
 	}
 
 	return textResult(b.String()), nil, nil
@@ -135,7 +144,16 @@ func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	limit := clampLimit(in.Limit, searchLimitDefault, searchLimitMax)
 
-	hits, err := s.svc.Search(ctx, in.Query, limit)
+	search, err := s.svc.SearchWithSources(ctx, in.Query, limit)
+
+	defer func() {
+		if result != nil {
+			withProvenance(result, docs.Source{}, search.Coverage)
+		}
+	}()
+
+	hits := search.Hits
+
 	if err != nil {
 		return s.toolError(ctx, toolSearchDocs, err, "query", in.Query), nil, nil
 	}
@@ -157,7 +175,7 @@ func (s *Server) handleSearchDocs(ctx context.Context, _ *mcp.CallToolRequest, i
 			size = fmt.Sprintf(" [cached page bytes: %d]", *h.PageBytes)
 		}
 
-		fmt.Fprintf(&b, "%s - %s%s%s\n  %s\n", h.Doc.Slug, h.Doc.Title, src, size, h.Snippet)
+		fmt.Fprintf(&b, "%s - %s%s%s\n  %s\n  %s", h.Doc.Slug, h.Doc.Title, src, size, h.Snippet, sourceText(h.Source))
 	}
 
 	return textResult(b.String()), nil, nil
@@ -178,6 +196,13 @@ func (s *Server) handleGetDoc(ctx context.Context, _ *mcp.CallToolRequest, in ge
 	}
 
 	page, err := s.svc.Get(ctx, in.Slug)
+
+	defer func() {
+		if result != nil {
+			withProvenance(result, page.Source, page.Catalogue)
+		}
+	}()
+
 	if err != nil {
 		return s.getDocError(ctx, in.Slug, err), nil, nil
 	}
@@ -257,8 +282,17 @@ const sectionLimit = 5
 
 // getDocSections handles get_doc's query path: return only the page sections
 // matching query, verbatim, paginated as one document.
-func (s *Server) getDocSections(ctx context.Context, slug, query string, offset int) *mcp.CallToolResult {
-	hits, stale, err := s.svc.SearchPage(ctx, slug, query, sectionLimit)
+func (s *Server) getDocSections(ctx context.Context, slug, query string, offset int) (result *mcp.CallToolResult) {
+	page, err := s.svc.Get(ctx, slug)
+
+	defer func() {
+		if result != nil {
+			withProvenance(result, page.Source, page.Catalogue)
+		}
+	}()
+
+	hits := docs.SearchSections(docs.SplitSections(page.Content), query, sectionLimit)
+
 	if err != nil {
 		return s.getDocError(ctx, slug, err)
 	}
@@ -286,7 +320,7 @@ func (s *Server) getDocSections(ctx context.Context, slug, query string, offset 
 		return errorResult(fmt.Sprintf("offset %d is at or past the end of the matched sections (%d bytes)", offset, w.Total))
 	}
 
-	return textResult(renderPage(stale, false, w))
+	return textResult(renderPage(page.Stale, false, w))
 }
 
 // headingNotFoundError lists the page's actual headings (or the closest ones)

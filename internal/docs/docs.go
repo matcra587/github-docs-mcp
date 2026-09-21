@@ -46,8 +46,9 @@ type Doc struct {
 
 // Index is the parsed llms.txt catalogue.
 type Index struct {
-	Docs   []Doc
-	bySlug map[string]int
+	Coverage Coverage
+	Docs     []Doc
+	bySlug   map[string]int
 }
 
 // BySlug returns the doc for slug and whether it exists.

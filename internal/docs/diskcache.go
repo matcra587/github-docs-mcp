@@ -46,6 +46,11 @@ func NewDiskCache(dir string) (*DiskCache, error) {
 
 // Store publishes a complete value under key with private permissions.
 func (d *DiskCache) Store(key string, value []byte) error {
+	return d.storeAt(key, value, time.Now())
+}
+
+// storeAt preserves the fetch time in the existing mtime-based format.
+func (d *DiskCache) storeAt(key string, value []byte, at time.Time) error {
 	if key == diskLockName {
 		return fmt.Errorf("reserved cache key: %w", os.ErrInvalid)
 	}
@@ -91,6 +96,11 @@ func (d *DiskCache) Store(key string, value []byte) error {
 	if err := f.Close(); err != nil {
 		_ = d.root.Remove(tmp)
 		return fmt.Errorf("close cache file: %w", err)
+	}
+
+	if err := d.root.Chtimes(tmp, at, at); err != nil {
+		_ = d.root.Remove(tmp)
+		return fmt.Errorf("timestamp cache file: %w", err)
 	}
 
 	if err := d.root.Rename(tmp, name); err != nil {

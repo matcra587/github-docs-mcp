@@ -9,6 +9,7 @@ import (
 // CacheDecision describes the entry considered by a request. Missing entries
 // have no age or remaining TTL; expired entries have zero remaining TTL.
 type CacheDecision struct {
+	fetchedAt      time.Time
 	Key            string `json:"key"`
 	Status         string `json:"status"`
 	Source         string `json:"source"`
@@ -39,13 +40,17 @@ func (t *CacheTrace) Decisions() []CacheDecision {
 }
 
 func decision(key, status, source string, at time.Time, ttl time.Duration) CacheDecision {
-	d := CacheDecision{Key: key, Status: status, Source: source}
+	return decisionAt(key, status, source, at, ttl, time.Now())
+}
+
+func decisionAt(key, status, source string, at time.Time, ttl time.Duration, now time.Time) CacheDecision {
+	d := CacheDecision{Key: key, Status: status, Source: source, fetchedAt: at}
 	if d.Source == "" {
 		d.Source = "memory"
 	}
 
 	if !at.IsZero() {
-		age := max(time.Since(at), 0)
+		age := max(now.Sub(at), 0)
 		ageMS, remainingMS := age.Milliseconds(), max(ttl-age, 0).Milliseconds()
 		d.AgeMS, d.RemainingTTLMS = &ageMS, &remainingMS
 	}

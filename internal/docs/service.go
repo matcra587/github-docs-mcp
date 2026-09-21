@@ -1,7 +1,6 @@
 package docs
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,12 +25,16 @@ const failCooldown = 30 * time.Second
 // Page is a fetched documentation page. Stale marks content served past its
 // TTL because the origin could not be reached (stale beats error).
 type Page struct {
-	Content []byte
-	Stale   bool
+	Content   []byte
+	Stale     bool
+	Source    Source
+	Catalogue Coverage
 }
 
 // ServiceConfig carries the cache and freshness knobs for a Service.
 type ServiceConfig struct {
+	// Now supplies the clock for freshness and fetch timestamps; nil uses time.Now.
+	Now           func() time.Time
 	Logger        *slog.Logger
 	IndexTTL      time.Duration
 	PageTTL       time.Duration
@@ -53,6 +56,7 @@ const (
 // Service is the docs domain API consumed by the MCP layer: index management,
 // page retrieval with the stale-servable cache lifecycle, and search.
 type Service struct {
+	now      func() time.Time
 	fetcher  Fetcher
 	baseURL  string
 	pages    *Cache
@@ -61,10 +65,9 @@ type Service struct {
 	sf       singleflight.Group
 	disk     *DiskCache
 
-	mu        sync.RWMutex
-	idx       *Index
-	idxAt     time.Time
-	idxSource string
+	mu      sync.RWMutex
+	curated catalogueComponent
+	listed  catalogueComponent
 
 	failMu     sync.Mutex
 	lastFailAt time.Time
@@ -76,6 +79,7 @@ type Service struct {
 // layer: a restart during an origin outage still has content to serve.
 func NewService(fetcher Fetcher, baseURL string, cfg ServiceConfig) *Service {
 	s := &Service{
+		now:      cfg.Now,
 		fetcher:  fetcher,
 		baseURL:  strings.TrimSuffix(baseURL, "/"),
 		pages:    NewCache(cfg.CacheMaxBytes),
@@ -83,6 +87,11 @@ func NewService(fetcher Fetcher, baseURL string, cfg ServiceConfig) *Service {
 		pageTTL:  cfg.PageTTL,
 		disk:     cfg.Disk,
 	}
+	if s.now == nil {
+		s.now = time.Now
+	}
+
+	s.pages.now = s.now
 	if cfg.Logger != nil {
 		s.pages.logger = cfg.Logger
 	}
@@ -106,42 +115,26 @@ func (s *Service) loadDisk() {
 		return
 	}
 
-	var (
-		indexRaw    []byte
-		pageListRaw []byte
-		indexAt     time.Time
-	)
-
 	for _, e := range entries {
 		switch e.Key {
-		case diskIndexKey:
-			indexRaw, indexAt = e.Value, e.StoredAt
-		case diskPageListKey:
-			pageListRaw = e.Value
+		case diskIndexKey, diskPageListKey:
+			idx, parseErr := s.parseComponent(e.Key, e.Value)
+			if parseErr != nil {
+				continue
+			}
+
+			component := catalogueComponent{index: idx, at: e.StoredAt, cacheSource: "disk"}
+			if e.Key == diskIndexKey {
+				s.curated = component
+			} else {
+				s.listed = component
+			}
 		default:
 			if slug, ok := strings.CutPrefix(e.Key, diskPagePrefix); ok {
 				s.pages.putSource(slug, e.Value, s.pageTTL, e.StoredAt, "disk")
 			}
-			// Unprefixed keys (including any legacy layout) are ignored.
 		}
 	}
-
-	if indexRaw == nil {
-		return
-	}
-
-	idx, perr := ParseIndex(s.baseURL, bytes.NewReader(indexRaw))
-	if perr != nil {
-		return
-	}
-
-	if pageListRaw != nil {
-		idx = MergeIndex(idx, ParsePageList(s.baseURL, bytes.NewReader(pageListRaw)))
-	}
-
-	s.mu.Lock()
-	s.idx, s.idxAt, s.idxSource = idx, indexAt, "disk"
-	s.mu.Unlock()
 }
 
 // normalizeSlug forgives the slug forms an agent naturally lifts from a page:
@@ -178,53 +171,55 @@ func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 
 	idx, err := s.index(ctx)
 	if err != nil {
-		return Page{}, err
+		return Page{Catalogue: idx.Coverage}, err
 	}
 
 	doc, ok := idx.BySlug(slug)
 	if !ok {
-		return Page{}, fmt.Errorf("slug %q: %w", slug, ErrNotFound)
+		return Page{Catalogue: idx.Coverage}, fmt.Errorf("slug %q: %w", slug, ErrNotFound)
 	}
 
 	content, state, cached, d := s.pages.lookup(slug)
 	if cached && state == StateFresh {
 		s.record(ctx, d)
-		return Page{Content: content}, nil
+		return s.page(doc, content, d.fetchedAt, false, idx.Coverage), nil
 	}
 
 	if cached && s.originCoolingDown() {
-		d.Status = "stale-serve"
+		d.Status = cacheStaleServe
 		s.record(ctx, d)
 
-		return Page{Content: content, Stale: true}, nil
+		return s.page(doc, content, d.fetchedAt, true, idx.Coverage), nil
 	}
 
 	d.Status = "miss"
 	s.record(ctx, d)
 
-	fetched, err := s.fetchShared(ctx, "page:"+slug, func(dctx context.Context) ([]byte, error) {
+	fetched, err := fetchShared(ctx, s, "page:"+slug, func(dctx context.Context) (Page, error) {
 		body, ferr := s.fetcher.Fetch(dctx, doc.URL)
 		if ferr != nil {
-			return nil, ferr
+			return Page{}, ferr
 		}
 
 		// Caching inside the singleflight closure means exactly one writer
 		// per fetch and a result that survives even when every waiter has
 		// abandoned it.
-		s.pages.Put(slug, body, s.pageTTL)
-		s.storeDisk(diskPagePrefix+slug, body)
+		at := s.now()
+		s.pages.putAged(slug, body, s.pageTTL, at)
+		s.storeDisk(diskPagePrefix+slug, body, at)
 		s.noteOriginHealthy()
 
-		return body, nil
+		return s.page(doc, body, at, false, Coverage{}), nil
 	})
 	if err == nil {
-		return Page{Content: fetched}, nil
+		fetched.Catalogue = idx.Coverage
+		return fetched, nil
 	}
 
 	// A cancelled caller gets its cancellation, never a stale copy dressed up
 	// as an origin outage.
-	if errors.Is(err, context.Canceled) {
-		return Page{}, fmt.Errorf("fetch page %q: %w", slug, err)
+	if ctx.Err() != nil {
+		return s.page(doc, nil, time.Time{}, false, idx.Coverage), fmt.Errorf("fetch page %q: %w", slug, err)
 	}
 
 	if errors.Is(err, ErrNotFound) {
@@ -232,99 +227,19 @@ func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 		// background so the catalogue heals; the singleflight key dedups.
 		s.refreshIndexAsync()
 
-		return Page{}, fmt.Errorf("fetch page %q: %w", slug, err)
+		return s.page(doc, nil, time.Time{}, false, idx.Coverage), fmt.Errorf("fetch page %q: %w", slug, err)
 	}
 
 	s.noteOriginFailure()
 
 	if stale, _, ok, staleDecision := s.pages.lookup(slug); ok {
-		staleDecision.Status = "stale-serve"
+		staleDecision.Status = cacheStaleServe
 		s.record(ctx, staleDecision)
 
-		return Page{Content: stale, Stale: true}, nil
+		return s.page(doc, stale, staleDecision.fetchedAt, true, idx.Coverage), nil
 	}
 
-	return Page{}, fmt.Errorf("fetch page %q: %w", slug, err)
-}
-
-// index returns a fresh index when possible, refreshing through singleflight;
-// when refresh fails, or the origin is cooling down after a failure, a
-// previously parsed index is served instead (§2b lifecycle: a working
-// catalogue is never discarded).
-func (s *Service) index(ctx context.Context) (*Index, error) {
-	s.mu.RLock()
-	idx, at, source := s.idx, s.idxAt, s.idxSource
-	s.mu.RUnlock()
-
-	if idx != nil && time.Since(at) < s.indexTTL {
-		s.record(ctx, decision("index", "hit", source, at, s.indexTTL))
-		return idx, nil
-	}
-
-	if idx != nil && s.originCoolingDown() {
-		s.record(ctx, decision("index", "stale-serve", source, at, s.indexTTL))
-		return idx, nil
-	}
-
-	s.record(ctx, decision("index", "miss", source, at, s.indexTTL))
-
-	fresh, err := s.refreshIndex(ctx)
-	if err == nil {
-		return fresh, nil
-	}
-
-	if idx != nil {
-		s.record(ctx, decision("index", "stale-serve", source, at, s.indexTTL))
-		return idx, nil
-	}
-
-	return nil, err
-}
-
-func (s *Service) refreshIndex(ctx context.Context) (*Index, error) {
-	_, err := s.fetchShared(ctx, "index", func(dctx context.Context) ([]byte, error) {
-		raw, ferr := s.fetcher.Fetch(dctx, s.baseURL+"/llms.txt")
-		if ferr != nil {
-			return nil, fmt.Errorf("fetch index: %w", ferr)
-		}
-
-		idx, perr := ParseIndex(s.baseURL, bytes.NewReader(raw))
-		if perr != nil {
-			return nil, fmt.Errorf("parse index: %w", perr)
-		}
-
-		// llms.txt is a curated shortlist; the page list is the origin's
-		// authoritative set of paths that resolve. Widening with it is what
-		// lets get_doc accept the thousands of slugs the origin's own pages
-		// link to. Best-effort: a page-list failure leaves the curated
-		// catalogue intact rather than failing the whole refresh.
-		if list, lerr := s.fetcher.Fetch(dctx, s.pageListURL()); lerr == nil {
-			idx = MergeIndex(idx, ParsePageList(s.baseURL, bytes.NewReader(list)))
-			s.storeDisk(diskPageListKey, list)
-		}
-
-		s.mu.Lock()
-		s.idx, s.idxAt, s.idxSource = idx, time.Now(), "memory"
-		s.pages.log(decision("index", "write", "memory", s.idxAt, s.indexTTL))
-		s.mu.Unlock()
-
-		s.storeDisk(diskIndexKey, raw)
-		s.noteOriginHealthy()
-
-		return raw, nil
-	})
-	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			s.noteOriginFailure()
-		}
-
-		return nil, err
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.idx, nil
+	return s.page(doc, nil, time.Time{}, false, idx.Coverage), fmt.Errorf("fetch page %q: %w", slug, err)
 }
 
 func (s *Service) refreshIndexAsync() {
@@ -333,21 +248,21 @@ func (s *Service) refreshIndexAsync() {
 		defer cancel()
 
 		// Failure is deliberately dropped: the next index() call surfaces it.
-		_, _ = s.refreshIndex(ctx)
+		_, _ = s.refreshIndex(ctx, true)
 	}()
 }
 
 // storeDisk best-effort persists an entry; a failing disk (full, read-only)
 // silently degrades the service to memory-only, exactly its cold behaviour.
-func (s *Service) storeDisk(key string, value []byte) {
+func (s *Service) storeDisk(key string, value []byte, at time.Time) {
 	if s.disk == nil {
 		return
 	}
 
-	if err := s.disk.Store(key, value); err != nil {
+	if err := s.disk.storeAt(key, value, at); err != nil {
 		s.pages.logger.Debug("cache decision", "key", key, "status", "write-failed", "source", "disk", "age_ms", 0, "error", err)
 	} else {
-		s.pages.log(decision(key, "write", "disk", time.Now(), 0))
+		s.pages.log(decisionAt(key, "write", "disk", at, 0, s.now()))
 	}
 }
 
@@ -355,12 +270,12 @@ func (s *Service) originCoolingDown() bool {
 	s.failMu.Lock()
 	defer s.failMu.Unlock()
 
-	return !s.lastFailAt.IsZero() && time.Since(s.lastFailAt) < failCooldown
+	return !s.lastFailAt.IsZero() && s.now().Sub(s.lastFailAt) < failCooldown
 }
 
 func (s *Service) noteOriginFailure() {
 	s.failMu.Lock()
-	s.lastFailAt = time.Now()
+	s.lastFailAt = s.now()
 	s.failMu.Unlock()
 }
 
@@ -374,7 +289,12 @@ func (s *Service) noteOriginHealthy() {
 // context, so concurrent callers share a single request and one caller's
 // cancellation cannot fail the rest. The calling context still controls how
 // long this caller waits.
-func (s *Service) fetchShared(ctx context.Context, key string, work func(context.Context) ([]byte, error)) ([]byte, error) {
+func fetchShared[T any](ctx context.Context, s *Service, key string, work func(context.Context) (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+
 	ch := s.sf.DoChan(key, func() (any, error) {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
@@ -384,12 +304,12 @@ func (s *Service) fetchShared(ctx context.Context, key string, work func(context
 
 	select {
 	case <-ctx.Done():
-		return nil, context.Cause(ctx)
+		return zero, context.Cause(ctx)
 	case res := <-ch:
 		if res.Err != nil {
-			return nil, res.Err
+			return zero, res.Err
 		}
 
-		return res.Val.([]byte), nil //nolint:forcetypeassert,errcheck // singleflight fn only returns []byte
+		return res.Val.(T), nil //nolint:forcetypeassert,errcheck // Each key has one concrete result type.
 	}
 }

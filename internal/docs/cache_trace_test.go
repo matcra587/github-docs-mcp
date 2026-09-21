@@ -115,7 +115,10 @@ func TestDiskAndIndexCacheDecisions(t *testing.T) {
 	}
 
 	second.mu.Lock()
-	second.idxAt = time.Now().Add(-2 * time.Hour)
+	second.curated.at = time.Now().Add(-2 * time.Hour)
+	second.listed.at = second.curated.at
+	second.curated.failedAt = time.Now()
+	second.listed.failedAt = time.Now()
 	second.mu.Unlock()
 	second.noteOriginFailure()
 

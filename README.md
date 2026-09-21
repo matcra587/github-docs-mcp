@@ -202,6 +202,12 @@ Search results show page sizes when a cached copy is available. Sizes may be out
 
 ### Where results come from
 
+Responses show source URLs, scope, fetch time and cache freshness. “Fresh” means within the cache TTL, not recently revised upstream. The server version is not a documentation revision; unfetched page freshness is unknown.
+
+Catalogue sources refresh independently, keeping their last valid copies after failures. Missing or stale sources are flagged, including in empty results and errors.
+
+Search labels upstream results or fallback over catalogue metadata and cached pages. Results are ranked and bounded, not exhaustive; fallback has reduced coverage.
+
 <details>
 <summary>GitHub Docs endpoints and offline search</summary>
 
@@ -394,6 +400,8 @@ their source and build. Neither guarantees vulnerability-free software.
 not. Entries past their TTL are kept, not evicted, and served with a note when
 the origin cannot be reached. The default disk cache carries that across
 restarts, so a process starting during an outage still has something to serve.
+
+Fetch times survive cache hits and restarts. Older disk entries record cache-write time instead.
 
 **One fetch per miss.** Concurrent callers for the same page share a single
 request through singleflight, on a detached context, so one caller cancelling

@@ -2,7 +2,6 @@ package docs
 
 import (
 	"context"
-	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 // Hit is one search result. MatchedBody marks hits found in cached page
 // content rather than the index metadata alone.
 type Hit struct {
+	Source      Source
 	Doc         Doc
 	Score       int
 	Snippet     string
@@ -181,12 +181,8 @@ func (s *Service) SearchPage(ctx context.Context, slug, query string, limit int)
 
 // List returns catalogue entries, optionally filtered by slug-prefix section.
 func (s *Service) List(ctx context.Context, section string, limit int) ([]Doc, error) {
-	idx, err := s.index(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return FilterDocs(idx, section, limit), nil
+	result, err := s.Catalogue(ctx, section, limit)
+	return result.Docs, err
 }
 
 // Search ranks pages against query using the origin's own search endpoint,
@@ -202,43 +198,66 @@ func (s *Service) List(ctx context.Context, section string, limit int) ([]Doc, e
 // whether the origin happened to be up. The origin path is still bounded by
 // the largest page the endpoint will serve.
 func (s *Service) Search(ctx context.Context, query string, limit int) ([]Hit, error) {
+	result, err := s.SearchWithSources(ctx, query, limit)
+	return result.Hits, err
+}
+
+// SearchWithSources returns coverage even when no pages match.
+func (s *Service) SearchWithSources(ctx context.Context, query string, limit int) (SearchResult, error) {
 	idx, err := s.index(ctx)
+	result := SearchResult{Coverage: idx.Coverage}
+
+	result.Coverage.Mode = "unavailable"
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 
 	tokens := tokenize(query)
 	if len(tokens) == 0 {
-		return nil, nil
+		result.Coverage.Mode = "none (no searchable keywords)"
+		return result, nil
 	}
 
 	if !s.originCoolingDown() {
-		hits, serr := s.searchOrigin(ctx, idx, query, limit)
+		upstream, serr := s.searchOrigin(ctx, idx, query, limit)
 		if serr == nil {
 			s.record(ctx, decision("search", "bypass", "origin", time.Time{}, 0))
-			return s.withSizes(hits), nil
+			result.Hits = s.withSizes(upstream.Hits)
+			result.Coverage.Mode = "upstream (bounded ranked retrieval)"
+			result.Coverage.Sources = append(result.Coverage.Sources, upstream.Coverage.Sources...)
+
+			return result, nil
 		}
 
-		// A cancelled caller gets its cancellation, never a quietly narrower
-		// result set dressed up as a complete one.
-		if errors.Is(serr, context.Canceled) {
-			return nil, serr
+		if ctx.Err() != nil {
+			return result, serr
 		}
 
 		s.noteOriginFailure()
 	}
 
-	hits := s.searchLocal(ctx, idx, query, tokens, limit)
+	result.Hits, result.Coverage.StaleBodies = s.searchLocal(ctx, idx, query, tokens, limit)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+
+	result.Hits = s.withSizes(result.Hits)
+	result.Coverage.Mode = "fallback (catalogue metadata and cached bodies only; reduced coverage)"
+	result.Coverage.Degraded = true
+
 	s.record(ctx, decision("search", "fallback", "memory", time.Time{}, 0))
 
-	return s.withSizes(hits), nil
+	return result, nil
 }
 
 // searchLocal ranks catalogue metadata and augments it with cached page
 // bodies: a doc whose cached content contains every token is included even
 // when its metadata does not match. This is the origin-outage path.
-func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tokens []string, limit int) []Hit {
+func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tokens []string, limit int) ([]Hit, bool) {
+	staleBodies := false
+
 	hits := SearchIndex(idx, query, 0)
+
 	seen := make(map[string]bool, len(hits))
 
 	for _, h := range hits {
@@ -251,30 +270,30 @@ func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tok
 	decisions := make(map[string]CacheDecision)
 
 	for _, d := range idx.Docs {
-		if seen[d.Slug] {
-			continue
+		if ctx.Err() != nil {
+			break
 		}
 
 		body, state, ok, cacheDecision := s.pages.lookup(d.Slug)
 		s.pages.log(cacheDecision)
 
-		if !ok {
-			continue
+		if state == StateStale {
+			staleBodies = true
 		}
 
-		if !containsAll(strings.ToLower(string(body)), tokens) {
+		if !ok || seen[d.Slug] || !containsAll(strings.ToLower(string(body)), tokens) {
 			continue
 		}
 
 		bodyMatched[d.Slug] = body
 
 		if state == StateStale {
-			cacheDecision.Status = "stale-serve"
+			cacheDecision.Status = cacheStaleServe
 		}
 
 		decisions[d.Slug] = cacheDecision
 
-		hits = append(hits, Hit{Doc: d, Score: bodyWeight * len(tokens), MatchedBody: true})
+		hits = append(hits, Hit{Doc: d, Source: pageSource(d.URL, cacheDecision.fetchedAt, state == StateStale), Score: bodyWeight * len(tokens), MatchedBody: true})
 	}
 
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -290,7 +309,7 @@ func (s *Service) searchLocal(ctx context.Context, idx *Index, query string, tok
 		}
 	}
 
-	return hits
+	return hits, staleBodies
 }
 
 func tokenize(q string) []string {
@@ -376,6 +395,10 @@ func editDistance(a, b string) int {
 // withSizes uses only already-cached bodies; measuring a result never fetches it.
 func (s *Service) withSizes(hits []Hit) []Hit {
 	for i := range hits {
+		if hits[i].Source.URL == "" {
+			hits[i].Source = hits[i].Doc.Source()
+		}
+
 		if size, ok := s.pages.Size(hits[i].Doc.Slug); ok {
 			hits[i].PageBytes = &size
 		}
