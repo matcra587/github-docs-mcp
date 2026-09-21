@@ -44,16 +44,17 @@ func SplitSections(md []byte) []Section {
 
 	sc := bufio.NewScanner(bytes.NewReader(md))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Split(scanRawLines)
 
 	for sc.Scan() {
-		line := sc.Text()
+		raw := sc.Text()
+		line := strings.TrimRight(raw, "\r\n")
 
 		if isFenceDelimiter(line) {
 			inFence = !inFence
 
 			if cur != nil {
-				curBody.WriteString(line)
-				curBody.WriteByte('\n')
+				curBody.WriteString(raw)
 			}
 
 			continue
@@ -66,8 +67,7 @@ func SplitSections(md []byte) []Section {
 
 		if level == 0 {
 			if cur != nil {
-				curBody.WriteString(line)
-				curBody.WriteByte('\n')
+				curBody.WriteString(raw)
 			}
 
 			continue
@@ -83,8 +83,7 @@ func SplitSections(md []byte) []Section {
 
 		cur = &Section{Level: level, Heading: text, Breadcrumb: breadcrumb(crumb, level)}
 
-		curBody.WriteString(line)
-		curBody.WriteByte('\n')
+		curBody.WriteString(raw)
 	}
 
 	flush()

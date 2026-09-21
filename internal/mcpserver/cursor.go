@@ -15,16 +15,19 @@ import (
 )
 
 const (
-	cursorVersion   = 1
+	// Version 2 preserves source line endings in heading and query selections.
+	// Version 1 offsets address normalised text and cannot be resumed safely.
+	cursorVersion   = 2
 	maxCursorBytes  = 16 * 1024
 	pageWindowBytes = 50 * 1024
 )
 
 type selection struct {
-	Slug    string `json:"slug,omitempty"`
-	Heading string `json:"heading,omitempty"`
-	Query   string `json:"query,omitempty"`
-	Section string `json:"section,omitempty"`
+	Language string `json:"language,omitempty"`
+	Slug     string `json:"slug,omitempty"`
+	Heading  string `json:"heading,omitempty"`
+	Query    string `json:"query,omitempty"`
+	Section  string `json:"section,omitempty"`
 }
 
 type continuation struct {
@@ -118,7 +121,7 @@ func (c continuation) validateList() error {
 }
 
 func (c continuation) validatePage() error {
-	if c.Selection.Slug == "" || c.Selection.Section != "" {
+	if c.Selection.Slug == "" || c.Selection.Section != "" || c.Selection.Language != "" {
 		return errors.New("invalid page cursor selection")
 	}
 
@@ -190,6 +193,10 @@ func catalogueFingerprint(entries []docs.Doc) string {
 
 func (c continuation) restartError() *mcp.CallToolResult {
 	args := map[string]any{}
+	if c.Selection.Language != "" {
+		args["language"] = c.Selection.Language
+	}
+
 	if c.Tool == toolListDocs {
 		args["limit"] = c.Limit
 		if c.Selection.Section != "" {

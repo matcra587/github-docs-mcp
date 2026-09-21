@@ -56,14 +56,16 @@ const (
 // Service is the docs domain API consumed by the MCP layer: index management,
 // page retrieval with the stale-servable cache lifecycle, and search.
 type Service struct {
-	now      func() time.Time
-	fetcher  Fetcher
-	baseURL  string
-	pages    *Cache
-	indexTTL time.Duration
-	pageTTL  time.Duration
-	sf       singleflight.Group
-	disk     *DiskCache
+	language  string
+	languages map[string]*Service
+	now       func() time.Time
+	fetcher   Fetcher
+	baseURL   string
+	pages     *Cache
+	indexTTL  time.Duration
+	pageTTL   time.Duration
+	sf        singleflight.Group
+	disk      *DiskCache
 
 	mu      sync.RWMutex
 	curated catalogueComponent
@@ -96,6 +98,7 @@ func NewService(fetcher Fetcher, baseURL string, cfg ServiceConfig) *Service {
 		s.pages.logger = cfg.Logger
 	}
 
+	s.languageViews()
 	s.loadDisk()
 
 	return s
@@ -110,31 +113,43 @@ func (s *Service) loadDisk() {
 		return
 	}
 
-	entries, err := s.disk.loadBounded(s.pages.maxBytes + 2*catalogueMaxBytes)
+	entries, err := s.disk.loadBounded(s.pages.maxBytes + int64(len(SupportedLanguages())+1)*catalogueMaxBytes)
 	if err != nil {
 		return
 	}
 
 	for _, e := range entries {
-		switch e.Key {
-		case diskIndexKey, diskPageListKey:
-			idx, parseErr := s.parseComponent(e.Key, e.Value)
-			if parseErr != nil {
-				continue
-			}
+		if s.restoreCatalogue(e) {
+			continue
+		}
 
-			component := catalogueComponent{index: idx, at: e.StoredAt, cacheSource: "disk"}
-			if e.Key == diskIndexKey {
-				s.curated = component
-			} else {
-				s.listed = component
-			}
-		default:
-			if slug, ok := strings.CutPrefix(e.Key, diskPagePrefix); ok {
-				s.pages.putSource(slug, e.Value, s.pageTTL, e.StoredAt, "disk")
-			}
+		if slug, ok := strings.CutPrefix(e.Key, diskPagePrefix); ok {
+			s.pages.putSource(slug, e.Value, s.pageTTL, e.StoredAt, "disk")
 		}
 	}
+}
+
+func (s *Service) restoreCatalogue(entry DiskEntry) bool {
+	language, key, ok := catalogueKeyLanguage(entry.Key)
+	if !ok {
+		return false
+	}
+
+	view := s.languages[language]
+
+	idx, err := view.parseComponent(key, entry.Value)
+	if err != nil {
+		return true
+	}
+
+	component := catalogueComponent{index: idx, at: entry.StoredAt, cacheSource: "disk"}
+	if key == diskIndexKey {
+		view.curated = component
+	} else {
+		view.listed = component
+	}
+
+	return true
 }
 
 // normalizeSlug forgives the slug forms an agent naturally lifts from a page:
@@ -169,6 +184,15 @@ func normalizeSlug(slug string) string {
 func (s *Service) Get(ctx context.Context, slug string) (Page, error) {
 	slug = normalizeSlug(slug)
 
+	view, err := s.forSlug(slug)
+	if err != nil {
+		return Page{}, err
+	}
+
+	return view.get(ctx, slug)
+}
+
+func (s *Service) get(ctx context.Context, slug string) (Page, error) {
 	idx, err := s.index(ctx)
 	if err != nil {
 		return Page{Catalogue: idx.Coverage}, err

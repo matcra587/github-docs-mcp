@@ -14,9 +14,10 @@ import (
 // Sentinel errors for expected conditions. Matched with errors.Is at the
 // tool-handler boundary, where they translate to client-friendly tool errors.
 var (
-	ErrNotFound         = errors.New("docs: not found")
-	ErrHeadingNotFound  = errors.New("docs: heading not found")
-	ErrIndexUnavailable = errors.New("docs: index unavailable")
+	ErrNotFound            = errors.New("docs: not found")
+	ErrHeadingNotFound     = errors.New("docs: heading not found")
+	ErrIndexUnavailable    = errors.New("docs: index unavailable")
+	ErrUnsupportedLanguage = errors.New("docs: unsupported language")
 )
 
 // FetchError carries transport-level detail about a failed origin request.

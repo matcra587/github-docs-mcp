@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -30,29 +31,30 @@ func ExtractHeading(md []byte, heading string) ([]byte, error) {
 
 	sc := bufio.NewScanner(bytes.NewReader(md))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Split(scanRawLines)
 
 	emit := func(line string) {
 		if inSection {
 			out.WriteString(line)
-			out.WriteByte('\n')
 		}
 	}
 
 	for sc.Scan() {
-		line := sc.Text()
+		raw := sc.Text()
+		line := strings.TrimRight(raw, "\r\n")
 
 		// Shell comments inside fenced code blocks start with '#' too; while
 		// a fence is open, nothing is a heading.
 		if isFenceDelimiter(line) {
 			inFence = !inFence
 
-			emit(line)
+			emit(raw)
 
 			continue
 		}
 
 		if inFence {
-			emit(line)
+			emit(raw)
 			continue
 		}
 
@@ -66,7 +68,7 @@ func ExtractHeading(md []byte, heading string) ([]byte, error) {
 			level = hLevel
 		}
 
-		emit(line)
+		emit(raw)
 	}
 
 	if err := sc.Err(); err != nil {
@@ -110,7 +112,7 @@ func slugifyHeading(h string) string {
 
 	for _, r := range strings.ToLower(strings.TrimSpace(h)) {
 		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+		case unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r):
 			b.WriteRune(r)
 
 			lastHyphen = false
@@ -206,4 +208,18 @@ func trimPartialRune(b []byte) []byte {
 	}
 
 	return b
+}
+
+// scanRawLines retains original line endings, including the absence of a final
+// newline, so selected content is a byte-for-byte slice of the source.
+func scanRawLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i+1], nil
+	}
+
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+
+	return 0, nil, nil
 }

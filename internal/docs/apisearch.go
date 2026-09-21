@@ -49,7 +49,7 @@ func (s *Service) searchURL(query string, limit int) string {
 
 	q := url.Values{
 		"query":       {query},
-		"language":    {docsLanguage},
+		"language":    {s.Language()},
 		"version":     {docsVersion},
 		"client_name": {clientName},
 		"size":        {strconv.Itoa(size)},
@@ -60,7 +60,7 @@ func (s *Service) searchURL(query string, limit int) string {
 
 // pageListURL builds the request for the catalogue-widening page list.
 func (s *Service) pageListURL() string {
-	return s.baseURL + pageListPath + "/" + docsLanguage + "/" + url.PathEscape(docsVersion)
+	return s.baseURL + pageListPath + "/" + s.Language() + "/" + url.PathEscape(docsVersion)
 }
 
 // searchOrigin runs query against the origin's search endpoint and maps the
@@ -99,7 +99,11 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 
 	for _, h := range resp.Hits {
 		slug := cleanSlug(strings.TrimPrefix(h.URL, "/"))
-		if !isArticleSlug(slug) || seen[slug] {
+		if language := languagePath("/"+slug, ""); language != "" && language != s.Language() {
+			return SearchResult{}, fmt.Errorf("search response leaves requested language %q", s.Language())
+		}
+
+		if !strings.HasPrefix(slug, s.Language()+"/") || seen[slug] {
 			continue
 		}
 
@@ -110,11 +114,15 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 			doc = Doc{Slug: slug, Title: h.Title, URL: markdownURL(prefix, slug)}
 		}
 
+		if doc.Title == "" {
+			doc.Title = h.Title
+		}
+
 		// The endpoint returns hits already ranked; preserve that order by
 		// scoring them in descending sequence rather than re-ranking locally.
 		hits = append(hits, Hit{
 			Doc:         doc,
-			Source:      pageSource(doc.URL, time.Time{}, false),
+			Source:      pageSource(doc, time.Time{}, false),
 			Score:       len(resp.Hits) - len(hits),
 			Snippet:     apiSnippet(h.Breadcrumbs, h.Highlights.Content, h.Highlights.Title),
 			MatchedBody: true,
@@ -125,7 +133,7 @@ func (s *Service) searchOrigin(ctx context.Context, idx *Index, query string, li
 		hits = hits[:limit]
 	}
 
-	return SearchResult{Hits: hits, Coverage: Coverage{Sources: []Source{{URL: s.searchURL(query, limit), Language: docsLanguage, Version: docsVersion, FetchedAt: raw.at, Freshness: freshnessFresh}}}}, nil
+	return SearchResult{Hits: hits, Coverage: Coverage{Sources: []Source{{URL: s.searchURL(query, limit), Language: s.Language(), Version: docsVersion, FetchedAt: raw.at, Freshness: freshnessFresh}}}}, nil
 }
 
 // apiSnippet renders a one-line snippet from a hit's breadcrumbs and
@@ -145,7 +153,7 @@ func apiSnippet(breadcrumbs string, content, title []string) string {
 	body = strings.Join(strings.Fields(body), " ")
 
 	if len(body) > snippetMaxLen {
-		body = strings.TrimSpace(body[:snippetMaxLen]) + "…"
+		body = strings.TrimSpace(string(trimPartialRune([]byte(body[:snippetMaxLen])))) + "…"
 	}
 
 	switch {
