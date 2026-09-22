@@ -78,6 +78,12 @@ func TestLiveMultilingualMCP(t *testing.T) {
 				page := callTool(t, session, toolGetDoc, map[string]any{"slug": hit[1]})
 				require.False(t, page.IsError, textOf(t, page))
 				require.Contains(t, textOf(t, page), "language: "+language)
+				var hitBody strings.Builder
+				for _, window := range traverse(t, session, toolGetDoc, map[string]any{"slug": hit[1]}) {
+					hitBody.WriteString(pageBody(t, window))
+				}
+				require.Equal(t, string(liveSource(t, origin, "/"+hit[1]+".md")), hitBody.String())
+				t.Logf("LIVE HIT language=%s slug=%s", language, hit[1])
 			}
 			slug := language + "/actions/reference/workflows-and-actions/workflow-syntax"
 			windows := traverse(t, session, toolGetDoc, map[string]any{"slug": slug})
@@ -100,13 +106,44 @@ func TestLiveMultilingualMCP(t *testing.T) {
 			require.NotEmpty(t, selectedBody)
 			require.True(t, strings.HasPrefix(selectedBody, "## "+headings[0][1]+"\n"))
 			require.Contains(t, whole.String(), selectedBody)
-			groups := traverse(t, session, toolGetDoc, map[string]any{"slug": slug, "query": "jobs"})
+			html := string(liveSource(t, origin, "/"+slug))
+			require.Contains(t, html, `id="jobsjob_id"`)
+			published := regexp.MustCompile(`<h2[^>]*id="([^"]+)"[^>]*><a class="heading-link"`).FindStringSubmatch(html)
+			require.Len(t, published, 2)
+			prose := callTool(t, session, toolGetDoc, map[string]any{"slug": slug + "#" + published[1]})
+			require.False(t, prose.IsError, textOf(t, prose))
+			require.Equal(t, selectedBody, pageBody(t, textOf(t, prose)))
+			t.Logf("LIVE ANCHOR language=%s prose=%s", language, published[1])
+			for _, anchor := range []string{"jobsjob_id", "%6Aobsjob%5Fid"} {
+				anchored := callTool(t, session, toolGetDoc, map[string]any{"slug": slug + "#" + anchor})
+				require.False(t, anchored.IsError, textOf(t, anchored))
+				require.Contains(t, pageBody(t, textOf(t, anchored)), "## `jobs.<job_id>`")
+			}
+			precedence := callTool(t, session, toolGetDoc, map[string]any{"slug": slug + "#missing-lookup-target", "heading": headings[0][1], "query": "jobs"})
+			require.False(t, precedence.IsError, textOf(t, precedence))
+			require.Equal(t, selectedBody, pageBody(t, textOf(t, precedence)))
+			invalidAnchor := callTool(t, session, toolGetDoc, map[string]any{"slug": slug + "#missing-lookup-target"})
+			require.True(t, invalidAnchor.IsError)
+			groups := traverse(t, session, toolGetDoc, map[string]any{"slug": slug + "#missing-lookup-target", "query": "jobs"})
 			require.Greater(t, len(groups), 1)
 			listing := callTool(t, session, toolListDocs, map[string]any{"language": language, "limit": 1})
 			require.False(t, listing.IsError)
 			listCursor := nextArguments(t, textOf(t, listing))
 			require.NotNil(t, listCursor)
 			listed := callTool(t, session, toolListDocs, listCursor)
+			pageHeading := regexp.MustCompile(`(?m)^# (.+)$`).FindStringSubmatch(whole.String())
+			require.Len(t, pageHeading, 2)
+			anchoredWindows := traverse(t, session, toolGetDoc, map[string]any{"slug": slug, "heading": pageHeading[1]})
+			require.Greater(t, len(anchoredWindows), 1)
+			var anchoredBody strings.Builder
+			for _, window := range anchoredWindows {
+				anchoredBody.WriteString(pageBody(t, window))
+			}
+			start := strings.Index(whole.String(), "# "+pageHeading[1]+"\n")
+			require.GreaterOrEqual(t, start, 0)
+			rest := whole.String()[start:]
+			require.Equal(t, rest, anchoredBody.String())
+			anchorCursor := nextArguments(t, anchoredWindows[0])
 			pageCursor := nextArguments(t, windows[0])
 			restarted := liveProcess(t, binary, cache)
 			listReplay := callTool(t, restarted, toolListDocs, listCursor)
@@ -115,6 +152,9 @@ func TestLiveMultilingualMCP(t *testing.T) {
 			require.Equal(t, windows[1], textOf(t, pageReplay))
 			requireDiskSource(t, listReplay)
 			requireDiskSource(t, pageReplay)
+			anchorReplay := callTool(t, restarted, toolGetDoc, anchorCursor)
+			require.Equal(t, anchoredWindows[1], textOf(t, anchorReplay))
+			requireDiskSource(t, anchorReplay)
 			missing := callTool(t, session, toolGetDoc, map[string]any{"slug": language + "/__missing_multilingual_canary__"})
 			require.True(t, missing.IsError)
 			if language != "en" {

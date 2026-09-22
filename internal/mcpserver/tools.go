@@ -78,13 +78,13 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolSearchDocs,
-		Description: "Bounded ranked search using GitHub’s upstream index, with reduced coverage over catalogue metadata and cached bodies during outages. Returns ranked slugs with a matching-section breadcrumb; follow up with get_doc(slug, heading=...) or get_doc(slug, query=...).",
+		Description: "Bounded ranked search using GitHub’s upstream index, with reduced coverage over catalogue metadata and cached bodies during outages. Returns ranked slugs with contextual breadcrumbs, not executable heading names. Follow up with get_doc(slug) or get_doc(slug, query=...). Hits missing from the catalogue carry an availability notice.",
 		Annotations: readOnly("Search documentation"),
 	}, s.handleSearchDocs)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolGetDoc,
-		Description: "Fetch one GitHub documentation page as markdown. Accepts a slug (\"en/actions\"), a full docs URL, or a #anchor. Returns page content and source freshness. Use query= for focused lookup, heading= for a named section. Initial calls require slug; follow cursor-only continuations for every matching section and byte window.",
+		Description: "Fetch one GitHub documentation page as markdown. Accepts a page slug or a URL on the configured docs origin, optionally with #anchor. Selection precedence is heading, query, fragment, then full page. A fragment requires a page path; missing heading anchors return an error. Query strings, foreign origins and enterprise/version paths are rejected. Returns page content and source freshness. Use query= for focused lookup, heading= for a named section. Initial calls require slug; follow cursor-only continuations for every matching section and byte window.",
 		Annotations: readOnly("Get documentation page"),
 	}, s.handleGetDoc)
 }
@@ -220,7 +220,7 @@ func (s *Server) headingNotFoundError(ctx context.Context, slug, heading string,
 
 	headings := docs.PageHeadings(content)
 
-	msg := fmt.Sprintf("heading %q not found in %q. ", heading, slug)
+	msg := fmt.Sprintf("heading %q not found or unsupported in %q. Only heading anchors select sections, not arbitrary HTML IDs. Read the page with get_doc({\"slug\":%q}), or select an actual heading below. ", heading, slug, slug)
 
 	switch {
 	case len(headings) == 0:

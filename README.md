@@ -198,9 +198,9 @@ Arguments ending in `?` are optional. Initial `get_doc` calls require `slug`; a 
 
 Languages: `en` (default), `es`, `ja`, `pt` (Brazilian Portuguese), `zh` (Simplified Chinese), `ru`, `fr`, `ko`, `de`. Set `language` for search and listing; `get_doc` follows the slug or URL's language. Section filters must match the selected language. Missing translations return an error with an English alternative when known.
 
-Use `heading` or `query` for focused reading. Content arrives in 50 KiB windows, with up to five matching sections per group.
+Use `heading`, `query`, or a page URL's `#anchor` for focused reading, in that precedence order. Missing heading anchors return an error with actual headings; an empty fragment means the whole page. Content arrives in 50 KiB windows, with up to five matching sections per group.
 
-Full URLs must match the configured origin and base path. Foreign authorities, query strings, protocol-relative URLs and enterprise/version paths are rejected rather than reinterpreted as current GitHub.com docs.
+Full URLs must match the configured origin and base path. Foreign authorities, query strings, protocol-relative URLs and enterprise/version paths are rejected rather than reinterpreted as current GitHub.com docs. Search breadcrumbs provide context, not executable heading names; hits absent from the catalogue carry an availability notice.
 
 Follow the returned cursor-only call to continue `get_doc` or `list_docs`. Cursors work across restarts when content is unchanged; changed content returns a restart call. Legacy `offset` calls still work but cannot detect changed content. Cursors from earlier releases must be restarted.
 
@@ -233,6 +233,18 @@ The page list combines the first two endpoints. Curated pages keep their titles 
 `search_docs` uses GitHub's search endpoint to find pages, including those never fetched by this server. If that endpoint is unavailable, it searches the page list and cached text instead. Offline search therefore covers fewer pages.
 
 </details>
+
+### Live checks
+
+The [stdio MCP canary](internal/mcpserver/languages_live_test.go) passed these sampled checks on 2026-09-21:
+
+| Check | Coverage |
+| --- | --- |
+| Languages | All 9 listed above |
+| Search then fetch | 2 hits per language, 18 total; bodies matched upstream Markdown |
+| Workflow syntax pages | 206,349–341,219 bytes, fully read across 5–7 windows |
+
+Localized anchors, missing targets, cursor replay and disk restarts also passed. These samples do not cover every article. See [Contributing](CONTRIBUTING.md#checks) to rerun the live checks.
 
 ## Configuration
 

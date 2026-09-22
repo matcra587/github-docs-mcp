@@ -235,12 +235,15 @@ func (c *Client) doOnce(ctx context.Context, rawURL string) ([]byte, time.Durati
 	// the catalogue as plain text, search as JSON. HTML on a 200 means the
 	// origin rendered a page (or an error) instead of returning source, and
 	// caching that as documentation would poison the cache for a full TTL.
-	if ct := resp.Header.Get("Content-Type"); isHTML(ct) {
+	if ct := resp.Header.Get("Content-Type"); isHTML(ct) && ctx.Value(anchorHTMLKey{}) != true {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return nil, 0, &FetchError{URL: rawURL, Err: fmt.Errorf("%w (content-type %q)", errUnexpectedHTML, ct)}
 	}
 
 	limit := bodyCap(rawURL)
+	if ctx.Value(anchorHTMLKey{}) == true {
+		limit = catalogueMaxBytes
+	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
