@@ -1,7 +1,6 @@
 package docs
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"strings"
@@ -18,79 +17,64 @@ const maxContentBytes = 50 * 1024
 // heading of the same or higher level.
 func ExtractHeading(md []byte, heading string) ([]byte, error) {
 	want := strings.ToLower(strings.TrimSpace(heading))
-	// Agents often lift the kebab-case anchor from a page link (#hook-events)
-	// rather than the heading prose. Accept either form.
-	wantSlug := slugifyHeading(strings.TrimPrefix(want, "#"))
+	anchors := make(map[string]bool)
 
-	var (
-		out       bytes.Buffer
-		inSection bool
-		inFence   bool
-		level     int
-	)
+	headings := headingRanges(md)
+	for index, candidate := range headings {
+		anchor := uniqueAnchor(candidate.text, anchors)
 
-	sc := bufio.NewScanner(bytes.NewReader(md))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	sc.Split(scanRawLines)
-
-	emit := func(line string) {
-		if inSection {
-			out.WriteString(line)
+		matches := headingMatches(candidate.text, want, slugifyHeading(want))
+		if after, ok := strings.CutPrefix(heading, "#"); ok {
+			matches = anchor == after
 		}
-	}
 
-	for sc.Scan() {
-		raw := sc.Text()
-		line := strings.TrimRight(raw, "\r\n")
-
-		// Shell comments inside fenced code blocks start with '#' too; while
-		// a fence is open, nothing is a heading.
-		if isFenceDelimiter(line) {
-			inFence = !inFence
-
-			emit(raw)
-
+		if !matches {
 			continue
 		}
 
-		if inFence {
-			emit(raw)
-			continue
+		end := len(md)
+
+		for _, next := range headings[index+1:] {
+			if next.level <= candidate.level {
+				end = next.start
+				break
+			}
 		}
 
-		hLevel, hText := parseHeading(line)
-		if inSection && hLevel > 0 && hLevel <= level {
-			break
-		}
-
-		if !inSection && hLevel > 0 && headingMatches(hText, want, wantSlug) {
-			inSection = true
-			level = hLevel
-		}
-
-		emit(raw)
+		return md[candidate.start:end], nil
 	}
 
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("scan page: %w", err)
-	}
-
-	if !inSection {
-		return nil, fmt.Errorf("heading %q: %w", heading, ErrHeadingNotFound)
-	}
-
-	return out.Bytes(), nil
+	return nil, fmt.Errorf("heading %q: %w", heading, ErrHeadingNotFound)
 }
 
-// isFenceDelimiter reports whether line opens or closes a fenced code block.
-// CommonMark allows up to three spaces of indentation before the fence.
-func isFenceDelimiter(line string) bool {
-	trimmed := strings.TrimLeft(line, " ")
-	if len(line)-len(trimmed) > 3 {
-		return false
+func anchorHeading(text string) string {
+	text = headingPlain(text)
+
+	var anchor strings.Builder
+
+	for _, character := range strings.ToLower(text) {
+		switch {
+		case character == ' ':
+			anchor.WriteByte('-')
+		case character == '-' || character == '_' || unicode.IsLetter(character) || unicode.IsNumber(character) || unicode.IsMark(character):
+			anchor.WriteRune(character)
+		}
 	}
 
-	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+	return anchor.String()
+}
+
+func uniqueAnchor(text string, seen map[string]bool) string {
+	base := anchorHeading(text)
+
+	anchor := base
+	for suffix := 1; seen[anchor]; suffix++ {
+		anchor = fmt.Sprintf("%s-%d", base, suffix)
+	}
+
+	seen[anchor] = true
+
+	return anchor
 }
 
 // headingMatches reports whether a heading's text equals the wanted literal
@@ -141,14 +125,26 @@ func PageHeadings(md []byte) []string {
 // parseHeading returns the ATX heading level and text of line, or 0 when the
 // line is not a heading.
 func parseHeading(line string) (int, string) {
-	trimmed := strings.TrimLeft(line, "#")
-
-	level := len(line) - len(trimmed)
-	if level == 0 || level > 6 || !strings.HasPrefix(trimmed, " ") {
+	indented := strings.TrimLeft(line, " ")
+	if len(line)-len(indented) > 3 {
 		return 0, ""
 	}
 
-	return level, strings.TrimSpace(trimmed)
+	trimmed := strings.TrimLeft(indented, "#")
+
+	level := len(indented) - len(trimmed)
+	if level == 0 || level > 6 || (trimmed != "" && trimmed[0] != ' ' && trimmed[0] != '\t') {
+		return 0, ""
+	}
+
+	text := strings.TrimSpace(trimmed)
+
+	withoutClosing := strings.TrimRight(text, "#")
+	if withoutClosing != text && (withoutClosing == "" || strings.HasSuffix(withoutClosing, " ") || strings.HasSuffix(withoutClosing, "\t")) {
+		text = strings.TrimSpace(withoutClosing)
+	}
+
+	return level, text
 }
 
 // Window is one pageful of content: bytes [Offset, Next) of a Total-byte
@@ -208,18 +204,4 @@ func trimPartialRune(b []byte) []byte {
 	}
 
 	return b
-}
-
-// scanRawLines retains original line endings, including the absence of a final
-// newline, so selected content is a byte-for-byte slice of the source.
-func scanRawLines(data []byte, atEOF bool) (int, []byte, error) {
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i+1], nil
-	}
-
-	if atEOF && len(data) > 0 {
-		return len(data), data, nil
-	}
-
-	return 0, nil, nil
 }

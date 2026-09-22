@@ -1,8 +1,6 @@
 package docs
 
 import (
-	"bufio"
-	"bytes"
 	"sort"
 	"strings"
 )
@@ -23,70 +21,23 @@ type Section struct {
 // comment inside a code block never starts a section. Content before the first
 // heading is dropped (it belongs to no section).
 func SplitSections(md []byte) []Section {
-	var (
-		sections []Section
-		cur      *Section
-		curBody  bytes.Buffer
-		crumb    []string // heading text per level index (1-based, [0] unused)
-		inFence  bool
-	)
+	headings := headingRanges(md)
+	sections := make([]Section, 0, len(headings))
+	crumb := make([]string, 7)
 
-	crumb = make([]string, 7)
-
-	flush := func() {
-		if cur != nil {
-			cur.Body = append([]byte(nil), curBody.Bytes()...)
-			sections = append(sections, *cur)
+	for index, heading := range headings {
+		end := len(md)
+		if index+1 < len(headings) {
+			end = headings[index+1].start
 		}
 
-		curBody.Reset()
+		crumb[heading.level] = heading.text
+		for level := heading.level + 1; level < len(crumb); level++ {
+			crumb[level] = ""
+		}
+
+		sections = append(sections, Section{Level: heading.level, Heading: heading.text, Breadcrumb: breadcrumb(crumb, heading.level), Body: md[heading.start:end]})
 	}
-
-	sc := bufio.NewScanner(bytes.NewReader(md))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	sc.Split(scanRawLines)
-
-	for sc.Scan() {
-		raw := sc.Text()
-		line := strings.TrimRight(raw, "\r\n")
-
-		if isFenceDelimiter(line) {
-			inFence = !inFence
-
-			if cur != nil {
-				curBody.WriteString(raw)
-			}
-
-			continue
-		}
-
-		level, text := 0, ""
-		if !inFence {
-			level, text = parseHeading(line)
-		}
-
-		if level == 0 {
-			if cur != nil {
-				curBody.WriteString(raw)
-			}
-
-			continue
-		}
-
-		// New heading: close the previous section, update the breadcrumb.
-		flush()
-
-		crumb[level] = text
-		for i := level + 1; i < len(crumb); i++ {
-			crumb[i] = ""
-		}
-
-		cur = &Section{Level: level, Heading: text, Breadcrumb: breadcrumb(crumb, level)}
-
-		curBody.WriteString(raw)
-	}
-
-	flush()
 
 	return sections
 }
