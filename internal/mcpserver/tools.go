@@ -50,7 +50,7 @@ type (
 		Cursor  string `json:"cursor,omitempty" jsonschema:"Opaque continuation from a previous get_doc result; pass cursor only"`
 		Slug    string `json:"slug,omitempty"              jsonschema:"Doc slug from list_docs or search_docs, e.g. \"en/actions/tutorials/build-and-test-code/nodejs\". A full docs URL or an absolute path also works."`
 		Heading string `json:"heading,omitempty" jsonschema:"Optional heading, matched by exact text or its #kebab-anchor; returns only that section. A miss lists the page's real headings."`
-		Query   string `json:"query,omitempty"   jsonschema:"Optional keywords; returns only the sections of the page matching them, verbatim with heading breadcrumbs; the cheapest way to pull one fact from a long page. Ignored when heading is set."`
+		Query   string `json:"query,omitempty"   jsonschema:"Optional keywords for focused lookup when the heading is unknown; returns matching sections verbatim with breadcrumbs. Broad queries may return more text than the full page. Ignored when heading is set."`
 		Offset  int    `json:"offset,omitempty"  jsonschema:"Legacy byte offset; cannot validate snapshots. Prefer cursor continuations."`
 	}
 )
@@ -78,13 +78,13 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolSearchDocs,
-		Description: "Bounded ranked search using GitHub’s upstream index, with reduced coverage over catalogue metadata and cached bodies during outages. Returns ranked slugs with contextual breadcrumbs, not executable heading names. Follow up with get_doc(slug) or get_doc(slug, query=...). Hits missing from the catalogue carry an availability notice.",
+		Description: "Bounded ranked search using GitHub’s upstream index, with reduced coverage over catalogue metadata and cached bodies during outages. Start with a small limit and widen when evidence is missing. Returns ranked slugs with contextual breadcrumbs, not executable heading names. Follow up with get_doc(slug) or get_doc(slug, query=...). Hits missing from the catalogue carry an availability notice.",
 		Annotations: readOnly("Search documentation"),
 	}, s.handleSearchDocs)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        toolGetDoc,
-		Description: "Fetch one GitHub documentation page as markdown. Accepts a page slug or a URL on the configured docs origin, optionally with #anchor. Selection precedence is heading, query, fragment, then full page. A fragment requires a page path; missing heading anchors return an error. Query strings, foreign origins and enterprise/version paths are rejected. Returns page content and source freshness. Use query= for focused lookup, heading= for a named section. Initial calls require slug; follow cursor-only continuations for every matching section and byte window.",
+		Description: "Fetch one GitHub documentation page as markdown. Accepts a page slug or a URL on the configured docs origin, optionally with #anchor. Selection precedence is heading, query, fragment, then full page. A fragment requires a page path; missing heading anchors return an error. Query strings, foreign origins and enterprise/version paths are rejected. Returns page content and source freshness. Use a known heading or anchor; otherwise try a focused query. Read a short page in full when its whole subject is relevant. Initial calls require slug; follow cursor-only continuations for every matching section and byte window.",
 		Annotations: readOnly("Get documentation page"),
 	}, s.handleGetDoc)
 }
