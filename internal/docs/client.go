@@ -112,12 +112,18 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 				return errors.New("stopped after 10 redirects")
 			}
 
-			if req.URL.Host != u.Host {
-				return fmt.Errorf("redirect to %q outside base host", req.URL.Host)
-			}
-
 			if req.URL.Scheme != u.Scheme {
 				return fmt.Errorf("redirect changes scheme to %q", req.URL.Scheme)
+			}
+
+			if req.Response != nil {
+				if err := validateRedirectLocation(req.Response.Header.Get("Location")); err != nil {
+					return err
+				}
+			}
+
+			if err := validateFetchScope(req.URL, u); err != nil {
+				return err
 			}
 
 			from := requestLanguage(via[0].URL, u.Path)
@@ -147,8 +153,8 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("parse url: %w", err)
 	}
 
-	if u.Host != c.base.Host {
-		return nil, fmt.Errorf("url %q outside base host %q", rawURL, c.base.Host)
+	if err := validateFetchScope(u, c.base); err != nil {
+		return nil, err
 	}
 
 	var (

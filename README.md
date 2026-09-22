@@ -200,6 +200,8 @@ Languages: `en` (default), `es`, `ja`, `pt` (Brazilian Portuguese), `zh` (Simpli
 
 Use `heading` or `query` for focused reading. Content arrives in 50 KiB windows, with up to five matching sections per group.
 
+Full URLs must match the configured origin and base path. Foreign authorities, query strings, protocol-relative URLs and enterprise/version paths are rejected rather than reinterpreted as current GitHub.com docs.
+
 Follow the returned cursor-only call to continue `get_doc` or `list_docs`. Cursors work across restarts when content is unchanged; changed content returns a restart call. Legacy `offset` calls still work but cannot detect changed content.
 
 Search results show page sizes when a cached copy is available. Sizes may be out of date; unknown sizes stay unknown rather than triggering extra downloads. If GitHub Docs cannot be reached, cached pages are returned with a note that they may be stale.
